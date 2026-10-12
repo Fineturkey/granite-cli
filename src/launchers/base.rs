@@ -718,7 +718,7 @@ pub(crate) mod tests {
         let ui = PlainOutput;
         let ctx = LaunchContext {
             launcher_id: "test".to_string(),
-            working_dir: PathBuf::from("/tmp"),
+            working_dir: std::env::temp_dir(),
             base_env: HashMap::new(),
             dry_run: false,
             usage_tracker: None,
