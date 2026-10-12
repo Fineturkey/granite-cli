@@ -91,7 +91,12 @@ pub fn generate_session_id() -> String {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "unknown".to_string());
     let escaped_cwd = escape_working_dir(&cwd);
-    alog_channel!(MessageLevel::Debug2, "Escaped CWD {} -> {}", cwd, escaped_cwd);
+    alog_channel!(
+        MessageLevel::Debug2,
+        "Escaped CWD {} -> {}",
+        cwd,
+        escaped_cwd
+    );
 
     let epoch = SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
