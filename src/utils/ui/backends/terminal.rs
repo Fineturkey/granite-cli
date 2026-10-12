@@ -423,113 +423,62 @@ fn wrap_ansi_cell(s: &str, max_width: usize, is_grey_row: bool) -> Vec<String> {
 /// Minimum readable column width for short columns.
 const MIN_WIDTH: usize = 8;
 
-/// Natural width threshold above which a column receives a proportional
-/// minimum (half its natural width) instead of the flat MIN_WIDTH floor.
-/// This prevents URL / description columns from being squeezed to the same
-/// minimum as short ID or type columns.
-const WIDE_COL_THRESHOLD: usize = 20;
-
 /// Minimum terminal width to enforce (treat narrower terminals as this wide).
 const MIN_TERMINAL_WIDTH: u16 = 20;
 
 /// Number of separator characters between columns.
 const SEPARATOR_WIDTH: usize = 2;
 
-/// Scale natural column widths proportionally to fit within the terminal width.
+/// Fit natural column widths within the terminal width.
 ///
-/// When the natural widths (plus separators) exceed the terminal width, columns
-/// are scaled down proportionally. A minimum column width of 8 characters is
-/// enforced. Rounding errors from floor operations are distributed to columns
-/// that lost the largest fractional parts.
+/// When the natural widths (plus separators) exceed the terminal width, the
+/// narrowest columns keep their natural width and the widest ones share what
+/// is left equally, so a long note or URL wraps and an id or a size does not.
+/// The widths shrink to a common cap: every column narrower than the cap
+/// keeps its width, and every wider one gets the cap, with the remainder of
+/// the division going to the widest columns first. A minimum column width of
+/// 8 characters is enforced.
 ///
-/// If the natural widths fit comfortably, they are returned unchanged.
+/// If the natural widths fit, they are returned unchanged.
 fn scale_widths(natural: Vec<usize>, terminal_width: u16, col_count: usize) -> Vec<usize> {
     let term_width = terminal_width.max(MIN_TERMINAL_WIDTH) as usize;
     let separator_total = col_count.saturating_sub(1) * SEPARATOR_WIDTH;
     let available = term_width.saturating_sub(separator_total);
 
-    let natural_total: usize = natural.iter().sum();
-
-    // No scaling needed — natural widths fit
-    if natural_total <= available {
+    if natural.iter().sum::<usize>() <= available {
         return natural;
     }
 
-    // Scale proportionally
-    let scale = available as f64 / natural_total as f64;
+    let wanted: Vec<usize> = natural.iter().map(|&w| w.max(MIN_WIDTH)).collect();
+    let mut by_width: Vec<usize> = (0..wanted.len()).collect();
+    by_width.sort_by_key(|&i| wanted[i]);
 
-    // Compute per-column minimums: wide columns get half their natural width
-    // so that URL / description columns don't shrink as aggressively as short
-    // ID or type columns.  Cap each minimum at the column's proportional share
-    // of `available` so that a single very-wide column can't blow past the
-    // total budget on its own.
-    let per_col_budget = available / col_count.max(1);
-    let col_mins: Vec<usize> = natural
-        .iter()
-        .map(|&w| {
-            let raw = if w >= WIDE_COL_THRESHOLD {
-                (w / 2).max(MIN_WIDTH)
-            } else {
-                MIN_WIDTH
-            };
-            raw.min(per_col_budget).max(MIN_WIDTH)
-        })
-        .collect();
-
-    // Compute scaled values with fractional tracking
-    let mut scaled_with_fractions: Vec<(usize, usize, f64)> = natural
-        .iter()
-        .enumerate()
-        .map(|(idx, &w)| {
-            let exact = w as f64 * scale;
-            let floored = exact.floor().max(col_mins[idx] as f64) as usize;
-            let lost = exact - floored as f64;
-            (idx, floored, lost)
-        })
-        .collect();
-
-    let mut scaled: Vec<usize> = scaled_with_fractions
-        .iter()
-        .map(|(_, floored, _)| *floored)
-        .collect();
-
-    // Handle case where MIN_WIDTH causes overflow: cap columns that exceed
-    let scaled_total: usize = scaled.iter().sum();
-    let mut excess = scaled_total.saturating_sub(available);
-
-    while excess > 0 {
-        // Find the column with the largest value that can still be reduced
-        let mut best_idx: Option<usize> = None;
-        let mut best_val = 0usize;
-        for (idx, floored, _) in &scaled_with_fractions {
-            if *floored > best_val && scaled[*idx] > col_mins[*idx] {
-                best_idx = Some(*idx);
-                best_val = scaled[*idx];
-            }
-        }
-        if let Some(idx) = best_idx {
-            scaled[idx] -= 1;
-            excess -= 1;
-        } else {
+    // Walk from the narrowest column: each one that fits within an equal
+    // share of what is left keeps its width; the rest share the remainder.
+    let mut remaining = available;
+    let mut capped = by_width.len();
+    for &i in &by_width {
+        if wanted[i] * capped > remaining {
             break;
         }
+        remaining -= wanted[i];
+        capped -= 1;
     }
+    if capped == 0 {
+        return wanted;
+    }
+    let cap = (remaining / capped).max(MIN_WIDTH);
+    let mut extra = remaining.saturating_sub(cap * capped);
 
-    // Distribute any remaining slack to columns that lost the most fraction
-    let scaled_total: usize = scaled.iter().sum();
-    let mut remaining = available.saturating_sub(scaled_total);
-
-    scaled_with_fractions.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
-
-    for (idx, _, _) in scaled_with_fractions.iter() {
-        if remaining == 0 {
+    let mut widths: Vec<usize> = wanted.iter().map(|&w| w.min(cap)).collect();
+    for &i in by_width.iter().rev().take(capped) {
+        if extra == 0 {
             break;
         }
-        scaled[*idx] += 1;
-        remaining -= 1;
+        widths[i] += 1;
+        extra -= 1;
     }
-
-    scaled
+    widths
 }
 
 /// Word-wrap text to fit within `max_width` characters.
@@ -683,15 +632,20 @@ mod tests {
     }
 
     #[test]
-    fn scale_widths_proportional_scaling() {
+    fn scale_widths_shrinks_the_widest_column_first() {
         let natural = vec![20, 10, 10]; // total 40
         let scaled = scale_widths(natural, 30, 3); // available: 30-4=26
-        // scale: 26/40 = 0.65
-        // exact: [13, 6.5, 6.5]
-        // floored: [13, 8, 8] (min 8) = 29, need 26
-        // After reducing excess of 3: [10, 8, 8] = 26
-        assert!(scaled.iter().sum::<usize>() <= 26);
-        assert!(scaled.iter().all(|&w| w >= 8));
+        // No column fits an equal share (26 / 3), so all three get the cap
+        // of 8; the 2 left over go to the widest columns, one each.
+        assert_eq!(scaled, vec![9, 8, 9]);
+    }
+
+    #[test]
+    fn scale_widths_keeps_short_columns_when_one_cell_is_long() {
+        // `hardware list` with a load warning in NOTES, in 100 columns.
+        let natural = vec![5, 15, 15, 9, 70]; // total 114
+        let scaled = scale_widths(natural, 100, 5); // available: 100-8=92
+        assert_eq!(scaled, vec![8, 15, 15, 9, 45]);
     }
 
     #[test]
