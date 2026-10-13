@@ -61,10 +61,10 @@ impl Ui for TerminalOutput {
             }
         }
 
-        // 2. Scale to terminal width
+        // 2. Fit to terminal width
         let widths = self
             .terminal_width
-            .map(|w| scale_widths(natural_widths.clone(), w, col_count))
+            .map(|w| fit_widths(natural_widths.clone(), headers, rows, w))
             .unwrap_or(natural_widths);
 
         // 3. Render title (unchanged)
@@ -436,21 +436,37 @@ const MIN_WIDTH: usize = 8;
 /// Minimum terminal width to enforce (treat narrower terminals as this wide).
 const MIN_TERMINAL_WIDTH: u16 = 20;
 
+/// Extra lines counted by [`fit_widths`] for a cell that starts to wrap.
+const STARTS_TO_WRAP: usize = 3;
+
 /// Number of separator characters between columns.
 const SEPARATOR_WIDTH: usize = 2;
 
 /// Fit natural column widths within the terminal width.
 ///
-/// When the natural widths (plus separators) exceed the terminal width, the
-/// narrowest columns keep their natural width and the widest ones share what
-/// is left equally, so a long note or URL wraps and an id or a size does not.
-/// The widths shrink to a common cap: every column narrower than the cap
-/// keeps its width, and every wider one gets the cap, with the remainder of
-/// the division going to the widest columns first. A minimum column width of
-/// 8 characters is enforced.
+/// When the natural widths (plus separators) exceed the terminal width,
+/// columns shrink in steps. Each step shrinks the column, and picks the
+/// width, that adds the fewest lines for each character it frees. Lines
+/// added are those added to the table's height plus those added to the
+/// column's own cells, and a cell that starts to wrap counts two more, so
+/// a long text that already wraps takes more lines before an id or a URL
+/// wraps. A column whose one long cell is in a row that
+/// another column already wraps frees its extra width for one line, so it
+/// shrinks before a column that would wrap every row. On a tie, the step
+/// that frees more characters wins, then the widest column. Columns shrink
+/// to their
+/// longest word first, and below that, splitting words, only when the table
+/// still does not fit. A column never shrinks below its header, or below 8
+/// characters unless it is narrower than that.
 ///
 /// If the natural widths fit, they are returned unchanged.
-fn scale_widths(natural: Vec<usize>, terminal_width: u16, col_count: usize) -> Vec<usize> {
+fn fit_widths(
+    natural: Vec<usize>,
+    headers: &[&str],
+    rows: &[Vec<String>],
+    terminal_width: u16,
+) -> Vec<usize> {
+    let col_count = natural.len();
     let term_width = terminal_width.max(MIN_TERMINAL_WIDTH) as usize;
     let separator_total = col_count.saturating_sub(1) * SEPARATOR_WIDTH;
     let available = term_width.saturating_sub(separator_total);
@@ -459,36 +475,121 @@ fn scale_widths(natural: Vec<usize>, terminal_width: u16, col_count: usize) -> V
         return natural;
     }
 
-    let wanted: Vec<usize> = natural.iter().map(|&w| w.max(MIN_WIDTH)).collect();
-    let mut by_width: Vec<usize> = (0..wanted.len()).collect();
-    by_width.sort_by_key(|&i| wanted[i]);
+    // columns[c][r] is the text of row r in column c, without its styling.
+    let columns: Vec<Vec<&str>> = (0..col_count)
+        .map(|c| {
+            rows.iter()
+                .map(|row| row.get(c).map_or("", |cell| split_cell_ansi(cell).1))
+                .collect()
+        })
+        .collect();
+    let lines_at = |c: usize, width: usize| -> Vec<usize> {
+        columns[c]
+            .iter()
+            .map(|text| wrap_text(text, width).len())
+            .collect()
+    };
+    let floor: Vec<usize> = natural
+        .iter()
+        .zip(headers)
+        .map(|(&w, h)| w.min(MIN_WIDTH).max(char_len(h)))
+        .collect();
+    let longest_word: Vec<usize> = columns
+        .iter()
+        .zip(&floor)
+        .map(|(texts, &f)| {
+            texts
+                .iter()
+                .flat_map(|text| text.split_inclusive(is_break))
+                .map(|word| char_len(word.trim()))
+                .max()
+                .unwrap_or(0)
+                .max(f)
+        })
+        .collect();
 
-    // Walk from the narrowest column: each one that fits within an equal
-    // share of what is left keeps its width; the rest share the remainder.
-    let mut remaining = available;
-    let mut capped = by_width.len();
-    for &i in &by_width {
-        if wanted[i] * capped > remaining {
-            break;
+    let mut widths = natural;
+    let mut lines: Vec<Vec<usize>> = (0..col_count).map(|c| lines_at(c, widths[c])).collect();
+    for limit in [&longest_word, &floor] {
+        loop {
+            let excess = widths.iter().sum::<usize>().saturating_sub(available);
+            if excess == 0 {
+                break;
+            }
+            let mut best: Option<Step> = None;
+            for c in 0..col_count {
+                let lowest = limit[c].max(widths[c].saturating_sub(excess));
+                for width in (lowest..widths[c]).rev() {
+                    let shrunk = lines_at(c, width);
+                    let step = Step {
+                        column: c,
+                        width,
+                        freed: widths[c] - width,
+                        cost: added_lines(&lines, c, &shrunk),
+                        lines: shrunk,
+                    };
+                    if best.as_ref().is_none_or(|b| step.beats(b, &widths)) {
+                        best = Some(step);
+                    }
+                }
+            }
+            let Some(step) = best else {
+                break;
+            };
+            widths[step.column] = step.width;
+            lines[step.column] = step.lines;
         }
-        remaining -= wanted[i];
-        capped -= 1;
-    }
-    if capped == 0 {
-        return wanted;
-    }
-    let cap = (remaining / capped).max(MIN_WIDTH);
-    let mut extra = remaining.saturating_sub(cap * capped);
-
-    let mut widths: Vec<usize> = wanted.iter().map(|&w| w.min(cap)).collect();
-    for &i in by_width.iter().rev().take(capped) {
-        if extra == 0 {
-            break;
-        }
-        widths[i] += 1;
-        extra -= 1;
     }
     widths
+}
+
+/// One candidate step of [`fit_widths`]: shrink `column` to `width`.
+struct Step {
+    column: usize,
+    width: usize,
+    freed: usize,
+    cost: usize,
+    lines: Vec<usize>,
+}
+
+impl Step {
+    /// Fewer lines per character freed, then more characters freed, then the
+    /// wider column.
+    fn beats(&self, other: &Step, widths: &[usize]) -> bool {
+        let (mine, theirs) = (self.cost * other.freed, other.cost * self.freed);
+        mine < theirs
+            || (mine == theirs
+                && (self.freed > other.freed
+                    || (self.freed == other.freed && widths[self.column] > widths[other.column])))
+    }
+}
+
+/// Where [`wrap_text`] may break a line: after whitespace or punctuation.
+fn is_break(c: char) -> bool {
+    c.is_whitespace() || ",.;:!?-".contains(c)
+}
+
+/// The lines added when column `c` wraps to `shrunk` (lines per row): the
+/// increase in the height of each row plus the increase in the column's own
+/// cells, plus [`STARTS_TO_WRAP`] for each cell that starts to wrap.
+fn added_lines(lines: &[Vec<usize>], c: usize, shrunk: &[usize]) -> usize {
+    let mut added = 0;
+    for (r, &new) in shrunk.iter().enumerate() {
+        let others = lines
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != c)
+            .map(|(_, col)| col[r])
+            .max()
+            .unwrap_or(0);
+        let old_height = others.max(lines[c][r]);
+        added += others.max(new) - old_height;
+        added += new - lines[c][r];
+        if lines[c][r] == 1 && new > 1 {
+            added += STARTS_TO_WRAP;
+        }
+    }
+    added
 }
 
 /// Word-wrap text to fit within `max_width` characters.
@@ -505,7 +606,7 @@ fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut current_line = String::new();
 
-    for word in text.split_inclusive(|c: char| c.is_whitespace() || ",.;:!?-".contains(c)) {
+    for word in text.split_inclusive(is_break) {
         let word_trimmed = word.trim_start();
         // A word that follows punctuation keeps its leading space within a
         // line, and drops it at the start of one.
@@ -671,98 +772,97 @@ mod tests {
         assert_eq!(result, vec!["one.two,", "three.", "four"]);
     }
 
-    #[test]
-    fn scale_widths_no_scaling_when_fits() {
-        let natural = vec![10, 10, 10];
-        let scaled = scale_widths(natural, 50, 3);
-        assert_eq!(scaled, vec![10, 10, 10]);
+    fn cells(rows: &[&[&str]]) -> Vec<Vec<String>> {
+        rows.iter()
+            .map(|row| row.iter().map(|c| c.to_string()).collect())
+            .collect()
     }
 
     #[test]
-    fn scale_widths_shrinks_the_widest_column_first() {
-        let natural = vec![20, 10, 10]; // total 40
-        let scaled = scale_widths(natural, 30, 3); // available: 30-4=26
-        // No column fits an equal share (26 / 3), so all three get the cap
-        // of 8; the 2 left over go to the widest columns, one each.
-        assert_eq!(scaled, vec![9, 8, 9]);
+    fn fit_widths_unchanged_when_they_fit() {
+        let rows = cells(&[&["a", "b", "c"]]);
+        assert_eq!(
+            fit_widths(vec![10, 10, 10], &["A", "B", "C"], &rows, 50),
+            vec![10, 10, 10]
+        );
+        // Natural total (20) == available (22 - 2).
+        assert_eq!(
+            fit_widths(vec![10, 10], &["A", "B"], &rows, 22),
+            vec![10, 10]
+        );
     }
 
     #[test]
-    fn scale_widths_keeps_short_columns_when_one_cell_is_long() {
+    fn fit_widths_shrinks_a_column_whose_long_cell_is_in_a_tall_row() {
+        // `provider list` with legacy notes, in 100 columns.
+        let headers = ["ID", "TYPE", "BASE URL", "HARDWARE", "NOTES"];
+        let rows = cells(&[
+            &[
+                "ollama",
+                "ollama",
+                "http://localhost:11434",
+                "⚠ local (not set)",
+                "legacy config: run `granite-cli provider setup ollama` to set",
+            ],
+            &[
+                "vllm-lab",
+                "openai-compatible",
+                "http://lab.example:8000",
+                "⚠ local (not set)",
+                "legacy config: run `granite-cli provider setup openai-compatible --id vllm-lab` to set",
+            ],
+            &[
+                "openrouter",
+                "openrouter",
+                "https://openrouter.ai/api",
+                "⚠ local (not set)",
+                "legacy config: run `granite-cli provider setup openrouter` to set",
+            ],
+        ]);
+        let natural = vec![10, 17, 25, 17, 86];
+
+        let widths = fit_widths(natural, &headers, &rows, 100);
+
+        // openai-compatible wraps in a row that NOTES already wraps, and
+        // NOTES takes the rest; ids, URLs and hardware keep one line.
+        assert_eq!(widths, vec![10, 10, 25, 17, 30]);
+    }
+
+    #[test]
+    fn fit_widths_keeps_short_columns_when_one_cell_is_long() {
         // `hardware list` with a load warning in NOTES, in 100 columns.
-        let natural = vec![5, 15, 15, 9, 70]; // total 114
-        let scaled = scale_widths(natural, 100, 5); // available: 100-8=92
-        assert_eq!(scaled, vec![8, 15, 15, 9, 45]);
+        let headers = ["ID", "KIND", "MEMORY", "OS", "NOTES"];
+        let long = "word ".repeat(14);
+        let rows = cells(&[&["local", "unified 29.2 GB", "29.2 GB", "macos", long.trim()]]);
+        let natural = vec![5, 15, 7, 5, 69];
+
+        let widths = fit_widths(natural, &headers, &rows, 100);
+
+        assert_eq!(widths, vec![5, 15, 7, 5, 60]);
     }
 
     #[test]
-    fn scale_widths_enforces_minimum_when_scaling_needed() {
-        let natural = vec![20, 20, 20];
-        let scaled = scale_widths(natural, 30, 3); // available: 30-4=26
-        assert!(scaled.iter().all(|&w| w >= 8));
+    fn fit_widths_never_cuts_a_header_or_widens_a_column() {
+        let headers = ["IDENTIFIER", "X"];
+        let rows = cells(&[&["a b c d e f g h i j k l", "y"]]);
+
+        let widths = fit_widths(vec![23, 1], &headers, &rows, 20);
+
+        assert_eq!(widths, vec![17, 1]);
+
+        let widths = fit_widths(vec![23, 1], &headers, &rows, 10);
+        // The terminal is treated as 20 columns wide.
+        assert_eq!(widths, vec![17, 1]);
     }
 
     #[test]
-    fn scale_widths_minimum_terminal_width() {
-        let natural = vec![10, 10];
-        let scaled = scale_widths(natural, 10, 2); // very narrow
-        // Should treat as 20: available = 20-2 = 18
-        assert!(scaled.iter().sum::<usize>() <= 18);
-    }
+    fn fit_widths_stops_at_the_floor() {
+        let headers = ["A"; 10];
+        let rows = cells(&[&["word word"; 10]]);
 
-    #[test]
-    fn scale_widths_single_column() {
-        let natural = vec![30];
-        let scaled = scale_widths(natural, 30, 1); // no separators
-        // available = 30, natural = 30, no scaling needed
-        assert_eq!(scaled, vec![30]);
-    }
+        let widths = fit_widths(vec![9; 10], &headers, &rows, 30);
 
-    #[test]
-    fn scale_widths_preserves_total_approximately() {
-        let natural = vec![20, 15, 10, 5]; // total 50
-        let scaled = scale_widths(natural, 40, 4); // available: 40-6=34
-        // Total should be close to 34
-        let total: usize = scaled.iter().sum();
-        assert!(total <= 34);
-        assert!(total >= 30); // within a few of target due to rounding
-        assert!(scaled.iter().all(|&w| w >= 8));
-    }
-
-    #[test]
-    fn scale_widths_very_large_difference() {
-        // Natural is 100, available is 20 — should scale down to near 20
-        let natural = vec![100];
-        let scaled = scale_widths(natural, 22, 1); // available: 22
-        assert_eq!(scaled, vec![22]);
-    }
-
-    #[test]
-    fn scale_widths_multiple_columns_scale_down() {
-        let natural = vec![25, 10, 6, 8, 10]; // total 59
-        let scaled = scale_widths(natural, 50, 5); // available: 50-8=42
-        let total: usize = scaled.iter().sum();
-        assert!(total <= 42);
-        assert!(scaled.iter().all(|&w| w >= 8));
-    }
-
-    #[test]
-    fn scale_widths_rounding_compensation() {
-        // Create a scenario where MIN_WIDTH forces total > available
-        let natural = vec![7, 7, 7, 7, 7, 7, 7, 7, 7, 7]; // total 70
-        let scaled = scale_widths(natural, 30, 10); // available: 30-18=12
-        // Each gets at least MIN_WIDTH=8, so 10*8=80 > 12
-        // This is expected — MIN_WIDTH is a hard floor
-        assert!(scaled.iter().all(|&w| w >= 8));
-        assert_eq!(scaled.iter().sum::<usize>(), 80);
-    }
-
-    #[test]
-    fn scale_widths_exact_fit() {
-        let natural = vec![10, 10]; // total 20
-        let scaled = scale_widths(natural, 22, 2); // available: 22-2=20
-        // Natural total (20) == available (20), no scaling needed
-        assert_eq!(scaled, vec![10, 10]);
+        assert_eq!(widths, vec![8; 10]);
     }
 
     #[test]
