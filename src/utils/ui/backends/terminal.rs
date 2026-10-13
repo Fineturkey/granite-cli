@@ -325,6 +325,8 @@ impl HasUiMetadata for TerminalOutput {
 /*-- private --*/
 
 /// Count visible characters in a string, skipping ANSI escape sequences.
+/// Every character counts as one column, including multi-byte ones such as
+/// `⚠`.
 fn visible_len(s: &str) -> usize {
     let mut count = 0;
     let bytes = s.as_bytes();
@@ -345,11 +347,19 @@ fn visible_len(s: &str) -> usize {
                 i += 1;
             }
         } else {
-            count += 1;
+            // UTF-8 continuation bytes belong to the character before them.
+            if bytes[i] & 0xC0 != 0x80 {
+                count += 1;
+            }
             i += 1;
         }
     }
     count
+}
+
+/// The number of characters in `s`, which is its width in columns.
+fn char_len(s: &str) -> usize {
+    s.chars().count()
 }
 
 /// Split a cell string into (prefix_ansi, content, suffix_ansi).
@@ -402,7 +412,7 @@ fn wrap_ansi_cell(s: &str, max_width: usize, is_grey_row: bool) -> Vec<String> {
     lines
         .into_iter()
         .map(|line| {
-            let padding = max_width.saturating_sub(line.len());
+            let padding = max_width.saturating_sub(char_len(&line));
             let padded = format!("{}{}", line, " ".repeat(padding));
             if is_grey_row {
                 format!(
@@ -488,7 +498,7 @@ fn scale_widths(natural: Vec<usize>, terminal_width: u16, col_count: usize) -> V
 /// fallback. The result is a vector of lines that, when joined,
 /// reconstitute the original text (minus trailing spaces).
 fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
-    if text.is_empty() || text.len() <= max_width {
+    if text.is_empty() || char_len(text) <= max_width {
         return vec![text.to_string()];
     }
 
@@ -505,7 +515,7 @@ fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
             word
         };
 
-        if current_line.len() + piece.len() <= max_width {
+        if char_len(&current_line) + char_len(piece) <= max_width {
             current_line.push_str(piece);
         } else {
             // Flush current line if not empty
@@ -515,10 +525,14 @@ fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
             }
 
             // Handle word longer than max_width (character-wrap fallback)
-            if word_trimmed.len() > max_width {
+            if char_len(word_trimmed) > max_width {
                 let mut remaining = word_trimmed;
-                while remaining.len() > max_width {
-                    let (chunk, rest) = remaining.split_at(max_width);
+                while char_len(remaining) > max_width {
+                    let split = remaining
+                        .char_indices()
+                        .nth(max_width)
+                        .map_or(remaining.len(), |(i, _)| i);
+                    let (chunk, rest) = remaining.split_at(split);
                     lines.push(chunk.to_string());
                     remaining = rest;
                 }
@@ -635,6 +649,20 @@ mod tests {
             wrap_text("legacy config: run setup", 14),
             vec!["legacy config:", "run setup"]
         );
+    }
+
+    #[test]
+    fn wrap_text_counts_characters() {
+        assert_eq!(
+            wrap_text("⚠ local (not set)", 17),
+            vec!["⚠ local (not set)"]
+        );
+        assert_eq!(wrap_text("⚠⚠⚠⚠⚠⚠", 4), vec!["⚠⚠⚠⚠", "⚠⚠"]);
+    }
+
+    #[test]
+    fn visible_len_counts_characters_and_skips_ansi() {
+        assert_eq!(visible_len("\x1b[33m\x1b[1m⚠ not specified\x1b[0m"), 15);
     }
 
     #[test]
