@@ -497,9 +497,16 @@ fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
 
     for word in text.split_inclusive(|c: char| c.is_whitespace() || ",.;:!?-".contains(c)) {
         let word_trimmed = word.trim_start();
+        // A word that follows punctuation keeps its leading space within a
+        // line, and drops it at the start of one.
+        let piece = if current_line.is_empty() {
+            word_trimmed
+        } else {
+            word
+        };
 
-        if current_line.len() + word_trimmed.len() <= max_width {
-            current_line.push_str(word_trimmed);
+        if current_line.len() + piece.len() <= max_width {
+            current_line.push_str(piece);
         } else {
             // Flush current line if not empty
             if !current_line.is_empty() {
@@ -616,6 +623,18 @@ mod tests {
     fn wrap_text_multiple_words() {
         let result = wrap_text("hello world this is a test", 12);
         assert_eq!(result, vec!["hello world", "this is a", "test"]);
+    }
+
+    #[test]
+    fn wrap_text_keeps_the_space_after_punctuation() {
+        assert_eq!(
+            wrap_text("legacy config: run setup to set", 20),
+            vec!["legacy config: run", "setup to set"]
+        );
+        assert_eq!(
+            wrap_text("legacy config: run setup", 14),
+            vec!["legacy config:", "run setup"]
+        );
     }
 
     #[test]
