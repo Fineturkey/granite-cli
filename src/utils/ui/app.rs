@@ -178,6 +178,22 @@ pub enum AppMode {
         /// Currently highlighted item index (0 = "New instance", 1..N = existing).
         cursor: usize,
     },
+    /// Launch picker: user selects an existing configured launcher instance to launch.
+    LaunchPick {
+        /// The launcher type id (e.g. "bob").
+        type_id: String,
+        /// Sorted list of configured launcher instance ids.
+        instances: Vec<String>,
+        /// Currently highlighted instance index (0..instances.len()-1).
+        cursor: usize,
+    },
+    /// Confirmation dialog before launching a launcher instance and closing the TUI.
+    LaunchConfirm {
+        /// The launcher instance id to be launched.
+        instance_id: String,
+        /// Whether "Yes" is currently selected (defaults to true).
+        yes: bool,
+    },
 }
 
 /// Action returned by [`App::handle_key`] to drive the event loop in
@@ -276,8 +292,8 @@ impl App {
             return AppAction::Quit;
         }
 
-        // For InstancePick we need mutable access to the cursor field
-        // without borrowing self entirely, so handle it before the clone-based
+        // For InstancePick, LaunchPick, and LaunchConfirm we need mutable access
+        // without borrowing self entirely, so handle them before the clone-based
         // match that drives the other modes.
         if let AppMode::InstancePick {
             ref type_id,
@@ -310,12 +326,78 @@ impl App {
                     self.mode = AppMode::Browse;
                     return AppAction::StartSetup(section, type_id, instance_id);
                 }
-                KeyCode::Char('l') => {
-                    // Launch the selected instance (cursor > 0 = existing instance, Launchers only)
-                    if self.section == Section::Launchers && *cursor > 0 {
-                        let instance_id = instances[*cursor - 1].clone();
-                        self.mode = AppMode::Browse;
-                        return AppAction::Launch(instance_id);
+                _ => return AppAction::None,
+            }
+        }
+
+        if let AppMode::LaunchPick {
+            ref instances,
+            ref mut cursor,
+            ..
+        } = self.mode
+        {
+            match key.code {
+                KeyCode::Esc => {
+                    self.mode = AppMode::Browse;
+                    return AppAction::None;
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let max = instances.len().saturating_sub(1);
+                    *cursor = (*cursor + 1).min(max);
+                    return AppAction::None;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    *cursor = cursor.saturating_sub(1);
+                    return AppAction::None;
+                }
+                KeyCode::Enter | KeyCode::Char('l') => {
+                    if !instances.is_empty() {
+                        let instance_id = instances[*cursor].clone();
+                        self.mode = AppMode::LaunchConfirm {
+                            instance_id,
+                            yes: true,
+                        };
+                    }
+                    return AppAction::None;
+                }
+                _ => return AppAction::None,
+            }
+        }
+
+        if let AppMode::LaunchConfirm {
+            ref instance_id,
+            ref mut yes,
+        } = self.mode
+        {
+            match key.code {
+                KeyCode::Esc => {
+                    self.mode = AppMode::Browse;
+                    return AppAction::None;
+                }
+                KeyCode::Left
+                | KeyCode::Char('h')
+                | KeyCode::Right
+                | KeyCode::Char('l')
+                | KeyCode::Tab => {
+                    *yes = !*yes;
+                    return AppAction::None;
+                }
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    *yes = true;
+                    return AppAction::None;
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') => {
+                    *yes = false;
+                    return AppAction::None;
+                }
+                KeyCode::Enter => {
+                    let should_launch = *yes;
+                    let id = instance_id.clone();
+                    self.mode = AppMode::Browse;
+                    if should_launch {
+                        return AppAction::Launch(id);
+                    } else {
+                        return AppAction::None;
                     }
                 }
                 _ => return AppAction::None,
@@ -388,12 +470,15 @@ impl App {
                         if let Some(id) = self.selected_id() {
                             if let Some(instances) = self.existing_instances(&id) {
                                 if instances.len() == 1 {
-                                    return AppAction::Launch(instances[0].clone());
+                                    self.mode = AppMode::LaunchConfirm {
+                                        instance_id: instances[0].clone(),
+                                        yes: true,
+                                    };
                                 } else if instances.len() > 1 {
-                                    self.mode = AppMode::InstancePick {
+                                    self.mode = AppMode::LaunchPick {
                                         type_id: id,
                                         instances,
-                                        cursor: 1,
+                                        cursor: 0,
                                     };
                                 }
                             }
@@ -479,13 +564,16 @@ impl App {
                     if self.section == Section::Launchers {
                         if let Some(instances) = self.existing_instances(id) {
                             if instances.len() == 1 {
-                                return AppAction::Launch(instances[0].clone());
+                                self.mode = AppMode::LaunchConfirm {
+                                    instance_id: instances[0].clone(),
+                                    yes: true,
+                                };
                             } else if instances.len() > 1 {
                                 let id = id.clone();
-                                self.mode = AppMode::InstancePick {
+                                self.mode = AppMode::LaunchPick {
                                     type_id: id,
                                     instances,
-                                    cursor: 1,
+                                    cursor: 0,
                                 };
                             }
                         }
@@ -493,8 +581,10 @@ impl App {
                 }
                 _ => {}
             },
-            // InstancePick is handled above before the clone-based match.
-            AppMode::InstancePick { .. } => {}
+            // InstancePick, LaunchPick, and LaunchConfirm are handled above before the clone-based match.
+            AppMode::InstancePick { .. }
+            | AppMode::LaunchPick { .. }
+            | AppMode::LaunchConfirm { .. } => {}
         }
         AppAction::None
     }
@@ -536,6 +626,15 @@ impl App {
                     ref instances,
                     cursor,
                 } => self.render_instance_pick(frame, inner[1], type_id, instances, cursor),
+                AppMode::LaunchPick {
+                    ref type_id,
+                    ref instances,
+                    cursor,
+                } => self.render_launch_pick(frame, inner[1], type_id, instances, cursor),
+                AppMode::LaunchConfirm {
+                    ref instance_id,
+                    yes,
+                } => self.render_launch_confirm(frame, inner[1], instance_id, yes),
             }
         }
         self.render_footer(frame, outer[1]);
@@ -2318,11 +2417,13 @@ impl App {
                 }
             }
             AppMode::InstancePick { .. } => {
-                if self.section == Section::Launchers {
-                    vec![Hint::Move, Hint::Open("Select"), Hint::Launch, Hint::Cancel]
-                } else {
-                    vec![Hint::Move, Hint::Open("Select"), Hint::Cancel]
-                }
+                vec![Hint::Move, Hint::Open("Select"), Hint::Cancel]
+            }
+            AppMode::LaunchPick { .. } => {
+                vec![Hint::Move, Hint::Open("Select"), Hint::Cancel]
+            }
+            AppMode::LaunchConfirm { .. } => {
+                vec![Hint::ConfirmYN, Hint::Confirm, Hint::Cancel]
             }
         }
     }
@@ -2414,6 +2515,95 @@ impl App {
         let mut list_state = ListState::default();
         list_state.select(Some(cursor));
         frame.render_stateful_widget(list, area, &mut list_state);
+    }
+
+    /// Render the launch picker list for `LaunchPick` mode.
+    fn render_launch_pick(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        type_id: &str,
+        instances: &[String],
+        cursor: usize,
+    ) {
+        let list_items: Vec<ListItem> = instances
+            .iter()
+            .enumerate()
+            .map(|(i, label)| {
+                let prefix = if i == cursor { "▶ " } else { "  " };
+                let style = if i == cursor {
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(Line::from(Span::styled(format!("{prefix}{label}"), style)))
+            })
+            .collect();
+
+        let list = List::new(list_items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" {type_id} — Launch instance ")),
+        );
+        let mut list_state = ListState::default();
+        list_state.select(Some(cursor));
+        frame.render_stateful_widget(list, area, &mut list_state);
+    }
+
+    /// Render the launch confirmation dialog for `LaunchConfirm` mode.
+    fn render_launch_confirm(&self, frame: &mut Frame, area: Rect, instance_id: &str, yes: bool) {
+        let yes_style = if yes {
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        let no_style = if !yes {
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        let details = if let Some(lc) = self.ctx.config().get_launcher(instance_id) {
+            let caps = if lc.enabled_capabilities.is_empty() {
+                "(none)".to_string()
+            } else {
+                lc.enabled_capabilities.join(", ")
+            };
+            format!("type: {}, capabilities: {}", lc.launcher_type, caps)
+        } else {
+            String::new()
+        };
+
+        let message = if details.is_empty() {
+            format!(
+                "You're about to launch \"{instance_id}\" and close the granite-cli TUI. Proceed?"
+            )
+        } else {
+            format!(
+                "You're about to launch \"{instance_id}\" ({details}) and close the granite-cli TUI. Proceed?"
+            )
+        };
+
+        let lines = vec![
+            Line::from(message),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled(if yes { "▶ Yes " } else { "  Yes " }, yes_style),
+                Span::raw("   "),
+                Span::styled(if !yes { "▶ No " } else { "  No " }, no_style),
+            ]),
+        ];
+
+        let para = Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Confirm Launch "),
+        );
+        frame.render_widget(para, area);
     }
 }
 
@@ -4859,28 +5049,12 @@ mod tests {
     }
 
     #[test]
-    fn instance_pick_l_on_existing_instance_emits_launch() {
-        let mut a = app();
-        a.mode = AppMode::InstancePick {
-            type_id: "bob".to_string(),
-            instances: vec!["my-bob".to_string()],
-            cursor: 1,
-        };
-        a.section = Section::Launchers;
-        assert_eq!(
-            a.handle_key(key('l')),
-            AppAction::Launch("my-bob".to_string())
-        );
-        assert_eq!(a.mode, AppMode::Browse);
-    }
-
-    #[test]
-    fn instance_pick_l_on_new_entry_is_noop() {
+    fn instance_pick_l_is_noop() {
         let mut a = app();
         let mode = AppMode::InstancePick {
             type_id: "bob".to_string(),
             instances: vec!["my-bob".to_string()],
-            cursor: 0,
+            cursor: 1,
         };
         a.mode = mode.clone();
         a.section = Section::Launchers;
@@ -4889,30 +5063,20 @@ mod tests {
     }
 
     #[test]
-    fn instance_pick_l_outside_launchers_section_is_noop() {
-        let mut a = app();
-        let mode = AppMode::InstancePick {
-            type_id: "ollama".to_string(),
-            instances: vec!["my-ollama".to_string()],
-            cursor: 1,
-        };
-        a.mode = mode.clone();
-        a.section = Section::Providers;
-        assert_eq!(a.handle_key(key('l')), AppAction::None);
-        assert_eq!(a.mode, mode);
-    }
-
-    #[test]
-    fn browse_l_on_configured_launcher_emits_launch() {
+    fn browse_l_on_configured_launcher_single_instance_enters_launch_confirm() {
         let mut a = launcher_app();
+        assert_eq!(a.handle_key(key('l')), AppAction::None);
         assert_eq!(
-            a.handle_key(key('l')),
-            AppAction::Launch("my-bob".to_string())
+            a.mode,
+            AppMode::LaunchConfirm {
+                instance_id: "my-bob".to_string(),
+                yes: true,
+            }
         );
     }
 
     #[test]
-    fn browse_l_on_multi_instance_launcher_enters_instance_pick() {
+    fn browse_l_on_multi_instance_launcher_enters_launch_pick() {
         let mut config = Config::default();
         config.launchers.insert(
             "my-bob-1".to_string(),
@@ -4948,10 +5112,10 @@ mod tests {
         assert_eq!(a.handle_key(key('l')), AppAction::None);
         assert_eq!(
             a.mode,
-            AppMode::InstancePick {
+            AppMode::LaunchPick {
                 type_id: "bob".to_string(),
                 instances: vec!["my-bob-1".to_string(), "my-bob-2".to_string()],
-                cursor: 1,
+                cursor: 0,
             }
         );
     }
@@ -4990,21 +5154,84 @@ mod tests {
             .unwrap();
         a.sync_table_state();
 
-        // Step 1: Press 'l' in Browse mode -> enters InstancePick at cursor 1 (first instance)
+        // Step 1: Press 'l' in Browse mode -> enters LaunchPick at cursor 0 (first instance)
         assert_eq!(a.handle_key(key('l')), AppAction::None);
-        assert!(matches!(&a.mode, AppMode::InstancePick { cursor: 1, .. }));
+        assert!(matches!(&a.mode, AppMode::LaunchPick { cursor: 0, .. }));
 
-        // Step 2: Press 'j' (down) -> moves to cursor 2 (second instance: my-bob-2)
+        // Step 2: Press 'j' (down) -> moves to cursor 1 (second instance: my-bob-2)
         assert_eq!(
             a.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE)),
             AppAction::None
         );
-        assert!(matches!(&a.mode, AppMode::InstancePick { cursor: 2, .. }));
+        assert!(matches!(&a.mode, AppMode::LaunchPick { cursor: 1, .. }));
 
-        // Step 3: Press 'l' -> launches the chosen second instance
+        // Step 3: Press 'Enter' or 'l' -> enters LaunchConfirm
+        assert_eq!(a.handle_key(key('l')), AppAction::None);
         assert_eq!(
-            a.handle_key(key('l')),
+            a.mode,
+            AppMode::LaunchConfirm {
+                instance_id: "my-bob-2".to_string(),
+                yes: true,
+            }
+        );
+
+        // Step 4: Press 'Enter' to confirm launch -> emits Launch action and returns to Browse mode
+        assert_eq!(
+            a.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
             AppAction::Launch("my-bob-2".to_string())
+        );
+        assert_eq!(a.mode, AppMode::Browse);
+    }
+
+    #[test]
+    fn launch_confirm_toggle_no_cancels() {
+        let mut a = launcher_app();
+        a.mode = AppMode::LaunchConfirm {
+            instance_id: "my-bob".to_string(),
+            yes: true,
+        };
+        // Toggle with 'n'
+        assert_eq!(a.handle_key(key('n')), AppAction::None);
+        assert_eq!(
+            a.mode,
+            AppMode::LaunchConfirm {
+                instance_id: "my-bob".to_string(),
+                yes: false,
+            }
+        );
+        // Confirm 'No' with Enter -> returns AppAction::None and returns to Browse
+        assert_eq!(
+            a.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            AppAction::None
+        );
+        assert_eq!(a.mode, AppMode::Browse);
+    }
+
+    #[test]
+    fn launch_confirm_esc_cancels() {
+        let mut a = launcher_app();
+        a.mode = AppMode::LaunchConfirm {
+            instance_id: "my-bob".to_string(),
+            yes: true,
+        };
+        assert_eq!(
+            a.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            AppAction::None
+        );
+        assert_eq!(a.mode, AppMode::Browse);
+    }
+
+    #[test]
+    fn launch_pick_esc_cancels() {
+        let mut a = launcher_app();
+        a.mode = AppMode::LaunchPick {
+            type_id: "bob".to_string(),
+            instances: vec!["my-bob-1".to_string(), "my-bob-2".to_string()],
+            cursor: 0,
+        };
+        assert_eq!(
+            a.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            AppAction::None
         );
         assert_eq!(a.mode, AppMode::Browse);
     }
@@ -5028,17 +5255,21 @@ mod tests {
     }
 
     #[test]
-    fn detail_l_on_configured_launcher_emits_launch() {
+    fn detail_l_on_configured_launcher_single_instance_enters_launch_confirm() {
         let mut a = launcher_app();
         a.mode = AppMode::Detail("bob".to_string());
+        assert_eq!(a.handle_key(key('l')), AppAction::None);
         assert_eq!(
-            a.handle_key(key('l')),
-            AppAction::Launch("my-bob".to_string())
+            a.mode,
+            AppMode::LaunchConfirm {
+                instance_id: "my-bob".to_string(),
+                yes: true,
+            }
         );
     }
 
     #[test]
-    fn detail_l_on_multi_instance_launcher_enters_instance_pick() {
+    fn detail_l_on_multi_instance_launcher_enters_launch_pick() {
         let mut config = Config::default();
         config.launchers.insert(
             "my-bob-1".to_string(),
@@ -5068,10 +5299,10 @@ mod tests {
         assert_eq!(a.handle_key(key('l')), AppAction::None);
         assert_eq!(
             a.mode,
-            AppMode::InstancePick {
+            AppMode::LaunchPick {
                 type_id: "bob".to_string(),
                 instances: vec!["my-bob-1".to_string(), "my-bob-2".to_string()],
-                cursor: 1,
+                cursor: 0,
             }
         );
     }
@@ -5128,7 +5359,7 @@ mod tests {
     }
 
     #[test]
-    fn active_hints_instance_pick_launchers_includes_launch() {
+    fn active_hints_instance_pick_launchers_does_not_include_launch() {
         let mut a = launcher_app();
         a.mode = AppMode::InstancePick {
             type_id: "bob".to_string(),
@@ -5137,8 +5368,186 @@ mod tests {
         };
         assert_eq!(
             a.active_hints(),
-            vec![Hint::Move, Hint::Open("Select"), Hint::Launch, Hint::Cancel]
+            vec![Hint::Move, Hint::Open("Select"), Hint::Cancel]
         );
+    }
+
+    #[test]
+    fn active_hints_launch_pick() {
+        let mut a = launcher_app();
+        a.mode = AppMode::LaunchPick {
+            type_id: "bob".to_string(),
+            instances: vec!["my-bob-1".to_string(), "my-bob-2".to_string()],
+            cursor: 0,
+        };
+        assert_eq!(
+            a.active_hints(),
+            vec![Hint::Move, Hint::Open("Select"), Hint::Cancel]
+        );
+    }
+
+    #[test]
+    fn active_hints_launch_confirm() {
+        let mut a = launcher_app();
+        a.mode = AppMode::LaunchConfirm {
+            instance_id: "my-bob".to_string(),
+            yes: true,
+        };
+        assert_eq!(
+            a.active_hints(),
+            vec![Hint::ConfirmYN, Hint::Confirm, Hint::Cancel]
+        );
+    }
+
+    #[test]
+    fn launch_pick_key_navigation_and_clamping() {
+        let mut a = launcher_app();
+        a.mode = AppMode::LaunchPick {
+            type_id: "bob".to_string(),
+            instances: vec!["my-bob-1".to_string(), "my-bob-2".to_string()],
+            cursor: 1,
+        };
+
+        // Up arrow moves up
+        assert_eq!(
+            a.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+            AppAction::None
+        );
+        assert!(matches!(a.mode, AppMode::LaunchPick { cursor: 0, .. }));
+
+        // Up again saturates at 0
+        assert_eq!(a.handle_key(key('k')), AppAction::None);
+        assert!(matches!(a.mode, AppMode::LaunchPick { cursor: 0, .. }));
+
+        // Down arrow moves down
+        assert_eq!(
+            a.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            AppAction::None
+        );
+        assert!(matches!(a.mode, AppMode::LaunchPick { cursor: 1, .. }));
+
+        // Down again clamps at max
+        assert_eq!(a.handle_key(key('j')), AppAction::None);
+        assert!(matches!(a.mode, AppMode::LaunchPick { cursor: 1, .. }));
+
+        // Unrelated key is noop
+        assert_eq!(key('x').code, KeyCode::Char('x'));
+        assert_eq!(a.handle_key(key('x')), AppAction::None);
+
+        // Enter on empty instances is noop
+        a.mode = AppMode::LaunchPick {
+            type_id: "bob".to_string(),
+            instances: vec![],
+            cursor: 0,
+        };
+        assert_eq!(
+            a.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            AppAction::None
+        );
+    }
+
+    #[test]
+    fn launch_confirm_all_navigation_keys() {
+        let mut a = launcher_app();
+        a.mode = AppMode::LaunchConfirm {
+            instance_id: "my-bob".to_string(),
+            yes: true,
+        };
+
+        // Toggle with Tab
+        assert_eq!(
+            a.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+            AppAction::None
+        );
+        assert!(matches!(a.mode, AppMode::LaunchConfirm { yes: false, .. }));
+
+        // Toggle with Left
+        assert_eq!(
+            a.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
+            AppAction::None
+        );
+        assert!(matches!(a.mode, AppMode::LaunchConfirm { yes: true, .. }));
+
+        // Toggle with Right
+        assert_eq!(
+            a.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+            AppAction::None
+        );
+        assert!(matches!(a.mode, AppMode::LaunchConfirm { yes: false, .. }));
+
+        // Toggle with 'h'
+        assert_eq!(a.handle_key(key('h')), AppAction::None);
+        assert!(matches!(a.mode, AppMode::LaunchConfirm { yes: true, .. }));
+
+        // Toggle with 'l'
+        assert_eq!(a.handle_key(key('l')), AppAction::None);
+        assert!(matches!(a.mode, AppMode::LaunchConfirm { yes: false, .. }));
+
+        // 'y' sets true
+        assert_eq!(a.handle_key(key('y')), AppAction::None);
+        assert!(matches!(a.mode, AppMode::LaunchConfirm { yes: true, .. }));
+
+        // 'N' sets false
+        assert_eq!(a.handle_key(key('N')), AppAction::None);
+        assert!(matches!(a.mode, AppMode::LaunchConfirm { yes: false, .. }));
+
+        // 'Y' sets true
+        assert_eq!(a.handle_key(key('Y')), AppAction::None);
+        assert!(matches!(a.mode, AppMode::LaunchConfirm { yes: true, .. }));
+
+        // Other key is noop
+        assert_eq!(a.handle_key(key('z')), AppAction::None);
+        assert!(matches!(a.mode, AppMode::LaunchConfirm { yes: true, .. }));
+    }
+
+    #[test]
+    fn render_launch_pick_and_confirm_modes() {
+        let mut a = launcher_app();
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+
+        // Render LaunchPick mode
+        a.mode = AppMode::LaunchPick {
+            type_id: "bob".to_string(),
+            instances: vec!["my-bob-1".to_string(), "my-bob-2".to_string()],
+            cursor: 0,
+        };
+        terminal.draw(|f| a.render(f)).unwrap();
+
+        // Render LaunchConfirm mode (yes = true, with capabilities)
+        let mut config = Config::default();
+        config.launchers.insert(
+            "my-bob".to_string(),
+            crate::config::LauncherConfig {
+                launcher_id: "my-bob".to_string(),
+                launcher_type: "bob".to_string(),
+                enabled_capabilities: vec!["mcp".to_string()],
+                config: serde_json::json!({}),
+            },
+        );
+        let mut a2 = App::new(crate::AppContext::new(
+            config,
+            Arc::new(CaptureUi::default()),
+        ));
+        a2.mode = AppMode::LaunchConfirm {
+            instance_id: "my-bob".to_string(),
+            yes: true,
+        };
+        terminal.draw(|f| a2.render(f)).unwrap();
+
+        // Render LaunchConfirm mode (yes = false, without capabilities)
+        a.mode = AppMode::LaunchConfirm {
+            instance_id: "my-bob".to_string(),
+            yes: false,
+        };
+        terminal.draw(|f| a.render(f)).unwrap();
+
+        // Render LaunchConfirm mode for non-existent launcher id
+        a.mode = AppMode::LaunchConfirm {
+            instance_id: "unknown".to_string(),
+            yes: true,
+        };
+        terminal.draw(|f| a.render(f)).unwrap();
     }
 
     #[test]

@@ -815,7 +815,7 @@ async fn run_launcher_command(
     }
 }
 
-pub async fn run_launch(
+pub(crate) async fn run_launch(
     ctx: &mut AppContext,
     launcher_id: &str,
     args: &[String],
