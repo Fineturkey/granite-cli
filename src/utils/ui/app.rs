@@ -2384,6 +2384,15 @@ impl App {
                         hidden: self.hide_inactive,
                     });
                 }
+                // Show [l] Launch only on Launchers section AND when the selected
+                // launcher type has configured instances
+                if self.section == Section::Launchers {
+                    if let Some(id) = self.selected_id() {
+                        if self.existing_instances(&id).is_some() {
+                            hints.push(Hint::Launch);
+                        }
+                    }
+                }
                 hints.push(Hint::Quit);
                 if matches!(
                     self.section,
@@ -2394,15 +2403,6 @@ impl App {
                         | Section::Recommend
                 ) {
                     hints.push(Hint::ConfiguredLegend);
-                }
-                // Show [l] Launch only on Launchers section AND when the selected
-                // launcher type has configured instances
-                if self.section == Section::Launchers {
-                    if let Some(id) = self.selected_id() {
-                        if self.existing_instances(&id).is_some() {
-                            hints.push(Hint::Launch);
-                        }
-                    }
                 }
                 hints
             }
@@ -5324,7 +5324,12 @@ mod tests {
 
     #[test]
     fn active_hints_browse_shows_launch_for_configured_launcher() {
-        assert!(launcher_app().active_hints().contains(&Hint::Launch));
+        let hints = launcher_app().active_hints();
+        assert!(hints.contains(&Hint::Launch));
+        let len = hints.len();
+        assert_eq!(hints[len - 2], Hint::Quit);
+        assert_eq!(hints[len - 1], Hint::ConfiguredLegend);
+        assert_eq!(hints[len - 3], Hint::Launch);
     }
 
     #[test]
