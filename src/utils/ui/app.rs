@@ -5007,19 +5007,21 @@ mod tests {
 
     // -- Launch action ----------------------------------------------------------
 
-    /// App on the Launchers section with one configured `bob` instance named
-    /// `my-bob`, with the cursor on the `bob` row.
-    fn launcher_app() -> App {
+    /// App on the Launchers section with configured `bob` instances named
+    /// according to `instances`, with the cursor on the `bob` row.
+    fn launcher_app_with(instances: &[&str]) -> App {
         let mut config = Config::default();
-        config.launchers.insert(
-            "my-bob".to_string(),
-            crate::config::LauncherConfig {
-                launcher_id: "my-bob".to_string(),
-                launcher_type: "bob".to_string(),
-                enabled_capabilities: vec![],
-                config: serde_json::json!({}),
-            },
-        );
+        for id in instances {
+            config.launchers.insert(
+                id.to_string(),
+                crate::config::LauncherConfig {
+                    launcher_id: id.to_string(),
+                    launcher_type: "bob".to_string(),
+                    enabled_capabilities: vec![],
+                    config: serde_json::json!({}),
+                },
+            );
+        }
         let mut a = App::new(crate::AppContext::new(
             config,
             Arc::new(CaptureUi::default()),
@@ -5034,6 +5036,12 @@ mod tests {
             .unwrap();
         a.sync_table_state();
         a
+    }
+
+    /// App on the Launchers section with one configured `bob` instance named
+    /// `my-bob`, with the cursor on the `bob` row.
+    fn launcher_app() -> App {
+        launcher_app_with(&["my-bob"])
     }
 
     fn key(c: char) -> KeyEvent {
@@ -5069,37 +5077,7 @@ mod tests {
 
     #[test]
     fn browse_l_on_multi_instance_launcher_enters_launch_pick() {
-        let mut config = Config::default();
-        config.launchers.insert(
-            "my-bob-1".to_string(),
-            crate::config::LauncherConfig {
-                launcher_id: "my-bob-1".to_string(),
-                launcher_type: "bob".to_string(),
-                enabled_capabilities: vec![],
-                config: serde_json::json!({}),
-            },
-        );
-        config.launchers.insert(
-            "my-bob-2".to_string(),
-            crate::config::LauncherConfig {
-                launcher_id: "my-bob-2".to_string(),
-                launcher_type: "bob".to_string(),
-                enabled_capabilities: vec![],
-                config: serde_json::json!({}),
-            },
-        );
-        let mut a = App::new(crate::AppContext::new(
-            config,
-            Arc::new(CaptureUi::default()),
-        ));
-        a.section = Section::Launchers;
-        a.configured_only[2] = false;
-        a.row = a
-            .filtered_ids("")
-            .iter()
-            .position(|id| id == "bob")
-            .unwrap();
-        a.sync_table_state();
+        let mut a = launcher_app_with(&["my-bob-1", "my-bob-2"]);
 
         assert_eq!(a.handle_key(key('l')), AppAction::None);
         assert_eq!(
@@ -5114,37 +5092,7 @@ mod tests {
 
     #[test]
     fn browse_l_multi_instance_select_and_launch_flow() {
-        let mut config = Config::default();
-        config.launchers.insert(
-            "my-bob-1".to_string(),
-            crate::config::LauncherConfig {
-                launcher_id: "my-bob-1".to_string(),
-                launcher_type: "bob".to_string(),
-                enabled_capabilities: vec![],
-                config: serde_json::json!({}),
-            },
-        );
-        config.launchers.insert(
-            "my-bob-2".to_string(),
-            crate::config::LauncherConfig {
-                launcher_id: "my-bob-2".to_string(),
-                launcher_type: "bob".to_string(),
-                enabled_capabilities: vec![],
-                config: serde_json::json!({}),
-            },
-        );
-        let mut a = App::new(crate::AppContext::new(
-            config,
-            Arc::new(CaptureUi::default()),
-        ));
-        a.section = Section::Launchers;
-        a.configured_only[2] = false;
-        a.row = a
-            .filtered_ids("")
-            .iter()
-            .position(|id| id == "bob")
-            .unwrap();
-        a.sync_table_state();
+        let mut a = launcher_app_with(&["my-bob-1", "my-bob-2"]);
 
         // Step 1: Press 'l' in Browse mode -> enters LaunchPick at cursor 0 (first instance)
         assert_eq!(a.handle_key(key('l')), AppAction::None);
@@ -5262,30 +5210,7 @@ mod tests {
 
     #[test]
     fn detail_l_on_multi_instance_launcher_enters_launch_pick() {
-        let mut config = Config::default();
-        config.launchers.insert(
-            "my-bob-1".to_string(),
-            crate::config::LauncherConfig {
-                launcher_id: "my-bob-1".to_string(),
-                launcher_type: "bob".to_string(),
-                enabled_capabilities: vec![],
-                config: serde_json::json!({}),
-            },
-        );
-        config.launchers.insert(
-            "my-bob-2".to_string(),
-            crate::config::LauncherConfig {
-                launcher_id: "my-bob-2".to_string(),
-                launcher_type: "bob".to_string(),
-                enabled_capabilities: vec![],
-                config: serde_json::json!({}),
-            },
-        );
-        let mut a = App::new(crate::AppContext::new(
-            config,
-            Arc::new(CaptureUi::default()),
-        ));
-        a.section = Section::Launchers;
+        let mut a = launcher_app_with(&["my-bob-1", "my-bob-2"]);
         a.mode = AppMode::Detail("bob".to_string());
 
         assert_eq!(a.handle_key(key('l')), AppAction::None);
