@@ -304,16 +304,13 @@ impl App {
             match key.code {
                 KeyCode::Esc => {
                     self.mode = AppMode::Browse;
-                    return AppAction::None;
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
                     let max = instances.len();
                     *cursor = (*cursor + 1).min(max);
-                    return AppAction::None;
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
                     *cursor = cursor.saturating_sub(1);
-                    return AppAction::None;
                 }
                 KeyCode::Enter => {
                     let instance_id = if *cursor == 0 {
@@ -326,8 +323,9 @@ impl App {
                     self.mode = AppMode::Browse;
                     return AppAction::StartSetup(section, type_id, instance_id);
                 }
-                _ => return AppAction::None,
+                _ => {}
             }
+            return AppAction::None;
         }
 
         if let AppMode::LaunchPick {
@@ -339,16 +337,13 @@ impl App {
             match key.code {
                 KeyCode::Esc => {
                     self.mode = AppMode::Browse;
-                    return AppAction::None;
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
                     let max = instances.len().saturating_sub(1);
                     *cursor = (*cursor + 1).min(max);
-                    return AppAction::None;
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
                     *cursor = cursor.saturating_sub(1);
-                    return AppAction::None;
                 }
                 KeyCode::Enter | KeyCode::Char('l') => {
                     if !instances.is_empty() {
@@ -358,10 +353,10 @@ impl App {
                             yes: true,
                         };
                     }
-                    return AppAction::None;
                 }
-                _ => return AppAction::None,
+                _ => {}
             }
+            return AppAction::None;
         }
 
         if let AppMode::LaunchConfirm {
@@ -372,7 +367,6 @@ impl App {
             match key.code {
                 KeyCode::Esc => {
                     self.mode = AppMode::Browse;
-                    return AppAction::None;
                 }
                 KeyCode::Left
                 | KeyCode::Char('h')
@@ -380,15 +374,12 @@ impl App {
                 | KeyCode::Char('l')
                 | KeyCode::Tab => {
                     *yes = !*yes;
-                    return AppAction::None;
                 }
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
                     *yes = true;
-                    return AppAction::None;
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') => {
                     *yes = false;
-                    return AppAction::None;
                 }
                 KeyCode::Enter => {
                     let should_launch = *yes;
@@ -396,12 +387,11 @@ impl App {
                     self.mode = AppMode::Browse;
                     if should_launch {
                         return AppAction::Launch(id);
-                    } else {
-                        return AppAction::None;
                     }
                 }
-                _ => return AppAction::None,
+                _ => {}
             }
+            return AppAction::None;
         }
 
         match self.mode.clone() {
