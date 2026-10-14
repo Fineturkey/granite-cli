@@ -102,9 +102,24 @@ pub(crate) enum Removal {
 /// Asks what to do about the instances that point at `(kind, id)` before a
 /// removal strands them.
 ///
-/// Nothing pointing at it means no prompt. A session with nobody to ask
-/// removes only what was asked for, after saying what that breaks.
-pub(crate) fn confirm_removal(ctx: &crate::AppContext, kind: RefKind, id: &str) -> Result<Removal> {
+/// `cascade` and `refuse` correspond to the `--cascade` / `--refuse` CLI
+/// flags and are mutually exclusive.
+///
+/// - `refuse`: if anything depends on the target, returns an error
+///   immediately, which causes the process to exit with code 1.
+/// - `cascade`: if anything depends on the target, returns
+///   `Proceed { with: stranded }` without prompting.
+/// - neither flag, non-interactive session: warns about what would break and
+///   removes only the target (existing behaviour kept for `--output json` /
+///   `--output markdown`).
+/// - neither flag, interactive session: prompts the user.
+pub(crate) fn confirm_removal(
+    ctx: &crate::AppContext,
+    kind: RefKind,
+    id: &str,
+    cascade: bool,
+    refuse: bool,
+) -> Result<Removal> {
     let stranded = dependents(kind, id, ctx.config());
     if stranded.is_empty() {
         return Ok(Removal::Proceed { with: stranded });
@@ -118,6 +133,16 @@ pub(crate) fn confirm_removal(ctx: &crate::AppContext, kind: RefKind, id: &str) 
         ctx.ui.info(&format!(
             "  - {dependent_kind} '{dependent_id}'{type_suffix}"
         ));
+    }
+
+    if refuse {
+        anyhow::bail!(
+            "Cannot remove {kind} '{id}' because other configured instances depend on it."
+        );
+    }
+
+    if cascade {
+        return Ok(Removal::Proceed { with: stranded });
     }
 
     if !ctx.ui.is_interactive() {
@@ -153,9 +178,16 @@ pub(crate) fn confirm_removal(ctx: &crate::AppContext, kind: RefKind, id: &str) 
 
 /// Removes each instance through its own removal command, so anything
 /// depending on *them* gets the same question in turn.
-pub(crate) fn remove_all(ctx: &mut crate::AppContext, ids: &[(RefKind, String)]) -> Result<()> {
+///
+/// `cascade` is threaded down so that second-level dependents are also
+/// removed automatically when the original call used `--cascade`.
+pub(crate) fn remove_all(
+    ctx: &mut crate::AppContext,
+    ids: &[(RefKind, String)],
+    cascade: bool,
+) -> Result<()> {
     for (kind, id) in ids {
-        remove(ctx, *kind, id)?;
+        remove(ctx, *kind, id, cascade)?;
     }
     Ok(())
 }
@@ -236,7 +268,7 @@ pub(crate) async fn remediate(
             }
             Choice::Remove => {
                 previous = Some(error);
-                remove(ctx, fix.kind, &fix.id)?;
+                remove(ctx, fix.kind, &fix.id, false)?;
             }
             Choice::Disable => {
                 previous = Some(error);
@@ -618,12 +650,12 @@ fn disable(ctx: &mut crate::AppContext, fix: &Fix) -> Result<()> {
     Ok(())
 }
 
-fn remove(ctx: &mut crate::AppContext, kind: RefKind, id: &str) -> Result<()> {
+fn remove(ctx: &mut crate::AppContext, kind: RefKind, id: &str, cascade: bool) -> Result<()> {
     match kind {
-        RefKind::Launcher => LauncherCommands::remove(ctx, id),
-        RefKind::Capability => CapabilityCommands::remove(ctx, id),
-        RefKind::Model => ModelCommands::remove(ctx, id),
-        RefKind::Provider => ProviderCommands::remove(ctx, id),
+        RefKind::Launcher => LauncherCommands::remove(ctx, id, cascade, false),
+        RefKind::Capability => CapabilityCommands::remove(ctx, id, cascade, false),
+        RefKind::Model => ModelCommands::remove(ctx, id, cascade, false),
+        RefKind::Provider => ProviderCommands::remove(ctx, id, cascade, false),
     }
 }
 
@@ -829,7 +861,7 @@ mod tests {
         let mut ctx = ctx_model_with_one_dependent();
         answer(&ctx, &[0]);
 
-        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct").unwrap();
+        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", false, false).unwrap();
 
         assert!(ctx.config().get_model("granite-3.1-8b-instruct").is_none());
         assert!(ctx.config().get_capability("chat").is_none());
@@ -841,7 +873,7 @@ mod tests {
         let mut ctx = ctx_model_with_one_dependent();
         answer(&ctx, &[1]);
 
-        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct").unwrap();
+        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", false, false).unwrap();
 
         assert!(ctx.config().get_model("granite-3.1-8b-instruct").is_some());
         assert!(ctx.config().get_capability("chat").is_some());
@@ -853,7 +885,7 @@ mod tests {
         let mut ctx = ctx_model_with_one_dependent();
         answer(&ctx, &[2]);
 
-        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct").unwrap();
+        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", false, false).unwrap();
 
         assert!(ctx.config().get_model("granite-3.1-8b-instruct").is_none());
         // Left in place, and now dangling, which `capability list` reports.
@@ -867,7 +899,7 @@ mod tests {
         let mut ctx = ctx_model_with_one_dependent();
         *capture(&ctx).interactive.borrow_mut() = Some(false);
 
-        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct").unwrap();
+        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", false, false).unwrap();
 
         assert!(prompts(&ctx).is_empty());
         assert!(ctx.config().get_model("granite-3.1-8b-instruct").is_none());
@@ -882,9 +914,89 @@ mod tests {
         let _home = crate::config::TestConfigHome::new();
         let mut ctx = ctx_model_with_one_dependent();
 
-        CapabilityCommands::remove(&mut ctx, "chat").unwrap();
+        CapabilityCommands::remove(&mut ctx, "chat", false, false).unwrap();
 
         assert!(prompts(&ctx).is_empty());
+        assert!(ctx.config().get_capability("chat").is_none());
+    }
+    #[test]
+    fn removing_with_cascade_removes_target_and_dependents_without_prompting() {
+        let _home = crate::config::TestConfigHome::new();
+        let mut ctx = ctx_model_with_one_dependent();
+        *capture(&ctx).interactive.borrow_mut() = Some(false);
+
+        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", true, false).unwrap();
+
+        assert!(prompts(&ctx).is_empty());
+        assert!(ctx.config().get_model("granite-3.1-8b-instruct").is_none());
+        assert!(ctx.config().get_capability("chat").is_none());
+    }
+
+    #[test]
+    fn removing_with_cascade_does_not_prompt_in_an_interactive_session() {
+        let _home = crate::config::TestConfigHome::new();
+        let mut ctx = ctx_model_with_one_dependent();
+
+        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", true, false).unwrap();
+
+        assert!(prompts(&ctx).is_empty());
+        assert!(ctx.config().get_model("granite-3.1-8b-instruct").is_none());
+        assert!(ctx.config().get_capability("chat").is_none());
+    }
+
+    #[test]
+    fn cascade_follows_dependents_of_dependents() {
+        let _home = crate::config::TestConfigHome::new();
+        // provider <- model <- capability: removing the provider has to take
+        // the capability too, which only the model's own removal reaches.
+        let mut ctx = ctx_model_with_one_dependent();
+        *capture(&ctx).interactive.borrow_mut() = Some(false);
+
+        ProviderCommands::remove(&mut ctx, "ollama", true, false).unwrap();
+
+        assert!(prompts(&ctx).is_empty());
+        assert!(ctx.config().get_provider("ollama").is_none());
+        assert!(ctx.config().get_model("granite-3.1-8b-instruct").is_none());
+        assert!(ctx.config().get_capability("chat").is_none());
+    }
+
+    #[test]
+    fn removing_with_refuse_fails_when_dependents_exist() {
+        let _home = crate::config::TestConfigHome::new();
+        let mut ctx = ctx_model_with_one_dependent();
+        *capture(&ctx).interactive.borrow_mut() = Some(false);
+
+        let err =
+            ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", false, true).unwrap_err();
+
+        assert!(
+            err.to_string().contains("Cannot remove model"),
+            "got: {err}"
+        );
+        assert!(prompts(&ctx).is_empty());
+        assert!(ctx.config().get_model("granite-3.1-8b-instruct").is_some());
+        assert!(ctx.config().get_capability("chat").is_some());
+    }
+
+    #[test]
+    fn removing_with_refuse_does_not_prompt_in_an_interactive_session() {
+        let _home = crate::config::TestConfigHome::new();
+        let mut ctx = ctx_model_with_one_dependent();
+
+        let result = ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", false, true);
+
+        assert!(result.is_err());
+        assert!(prompts(&ctx).is_empty());
+        assert!(ctx.config().get_model("granite-3.1-8b-instruct").is_some());
+    }
+
+    #[test]
+    fn removing_with_refuse_succeeds_when_no_dependents_exist() {
+        let _home = crate::config::TestConfigHome::new();
+        let mut ctx = ctx_model_with_one_dependent();
+
+        CapabilityCommands::remove(&mut ctx, "chat", false, true).unwrap();
+
         assert!(ctx.config().get_capability("chat").is_none());
     }
 

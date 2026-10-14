@@ -355,7 +355,15 @@ impl ProviderCommands {
     ///
     /// Deletes the provider's config file and removes it from the in-memory
     /// config. After this call `provider list` will no longer show the entry.
-    pub fn remove(ctx: &mut crate::AppContext, provider_id: &str) -> Result<()> {
+    ///
+    /// `cascade` also removes everything that depends on the provider
+    /// without asking; `refuse` fails if anything depends on it.
+    pub fn remove(
+        ctx: &mut crate::AppContext,
+        provider_id: &str,
+        cascade: bool,
+        refuse: bool,
+    ) -> Result<()> {
         if ctx.config().get_provider(provider_id).is_none() {
             anyhow::bail!("No provider configured with id '{provider_id}'. Nothing to remove.");
         }
@@ -365,13 +373,15 @@ impl ProviderCommands {
             ctx,
             RefKind::Provider,
             provider_id,
+            cascade,
+            refuse,
         )? {
             crate::commands::shared::remediation::Removal::Cancel => {
                 ctx.ui.info(&format!("Keeping provider '{provider_id}'."));
                 return Ok(());
             }
             crate::commands::shared::remediation::Removal::Proceed { with } => {
-                crate::commands::shared::remediation::remove_all(ctx, &with)?;
+                crate::commands::shared::remediation::remove_all(ctx, &with, cascade)?;
             }
         }
 
@@ -711,7 +721,7 @@ mod tests {
         let mut ctx = ctx_with_provider("my-ollama", "http://localhost:11434");
         assert!(ctx.config().get_provider("my-ollama").is_some());
 
-        ProviderCommands::remove(&mut ctx, "my-ollama").unwrap();
+        ProviderCommands::remove(&mut ctx, "my-ollama", false, false).unwrap();
 
         assert!(ctx.config().get_provider("my-ollama").is_none());
         let infos = infos!(ctx);
@@ -725,7 +735,7 @@ mod tests {
     #[test]
     fn remove_nonexistent_provider_returns_err() {
         let mut ctx = test_ctx();
-        let result = ProviderCommands::remove(&mut ctx, "doesnt-exist");
+        let result = ProviderCommands::remove(&mut ctx, "doesnt-exist", false, false);
         assert!(result.is_err());
         assert!(
             result
@@ -739,7 +749,7 @@ mod tests {
     fn list_does_not_show_removed_provider() {
         let _home = crate::config::TestConfigHome::new();
         let mut ctx = ctx_with_provider("my-ollama", "http://localhost:11434");
-        ProviderCommands::remove(&mut ctx, "my-ollama").unwrap();
+        ProviderCommands::remove(&mut ctx, "my-ollama", false, false).unwrap();
         ProviderCommands::list(&ctx).unwrap();
         let tables = tables!(ctx);
         let (_, _, rows) = &tables[0];

@@ -264,6 +264,14 @@ enum ModelSubcommands {
     Remove {
         /// Configured model ID to remove
         model_id: String,
+
+        /// Also remove everything that depends on it, without asking
+        #[arg(long, conflicts_with = "refuse")]
+        cascade: bool,
+
+        /// Refuse to remove it, exiting non-zero, if anything depends on it
+        #[arg(long, conflicts_with = "cascade")]
+        refuse: bool,
     },
 }
 
@@ -297,6 +305,14 @@ enum CapabilitySubcommands {
     Remove {
         /// Configured capability ID to remove
         capability_id: String,
+
+        /// Also remove everything that depends on it, without asking
+        #[arg(long, conflicts_with = "refuse")]
+        cascade: bool,
+
+        /// Refuse to remove it, exiting non-zero, if anything depends on it
+        #[arg(long, conflicts_with = "cascade")]
+        refuse: bool,
     },
 }
 
@@ -340,6 +356,14 @@ enum ProviderSubcommands {
     Remove {
         /// Configured provider instance ID to remove
         provider_id: String,
+
+        /// Also remove everything that depends on it, without asking
+        #[arg(long, conflicts_with = "refuse")]
+        cascade: bool,
+
+        /// Refuse to remove it, exiting non-zero, if anything depends on it
+        #[arg(long, conflicts_with = "cascade")]
+        refuse: bool,
     },
 }
 
@@ -373,6 +397,14 @@ enum LauncherSubcommands {
     Remove {
         /// Configured launcher instance ID to remove
         launcher_id: String,
+
+        /// Also remove everything that depends on it, without asking
+        #[arg(long, conflicts_with = "refuse")]
+        cascade: bool,
+
+        /// Refuse to remove it, exiting non-zero, if anything depends on it
+        #[arg(long, conflicts_with = "cascade")]
+        refuse: bool,
     },
 }
 
@@ -756,7 +788,11 @@ async fn run_model_command(ctx: &mut AppContext, subcmd: ModelSubcommands) -> an
             instance_id,
         } => ModelCommands::setup(ctx, &model_type, instance_id.as_deref(), false).await,
         ModelSubcommands::Pull { model_id } => ModelCommands::pull(ctx, &model_id).await,
-        ModelSubcommands::Remove { model_id } => ModelCommands::remove(ctx, &model_id),
+        ModelSubcommands::Remove {
+            model_id,
+            cascade,
+            refuse,
+        } => ModelCommands::remove(ctx, &model_id, cascade, refuse),
     }
 }
 
@@ -774,9 +810,11 @@ async fn run_capability_command(
             capability_type,
             instance_id,
         } => CapabilityCommands::setup(ctx, &capability_type, instance_id.as_deref(), false).await,
-        CapabilitySubcommands::Remove { capability_id } => {
-            CapabilityCommands::remove(ctx, &capability_id)
-        }
+        CapabilitySubcommands::Remove {
+            capability_id,
+            cascade,
+            refuse,
+        } => CapabilityCommands::remove(ctx, &capability_id, cascade, refuse),
     }
 }
 
@@ -795,7 +833,11 @@ async fn run_provider_command(
         ProviderSubcommands::Health { provider_id } => {
             ProviderCommands::health(ctx, provider_id.as_deref()).await
         }
-        ProviderSubcommands::Remove { provider_id } => ProviderCommands::remove(ctx, &provider_id),
+        ProviderSubcommands::Remove {
+            provider_id,
+            cascade,
+            refuse,
+        } => ProviderCommands::remove(ctx, &provider_id, cascade, refuse),
     }
 }
 
@@ -811,7 +853,11 @@ async fn run_launcher_command(
             launcher_type,
             instance_id,
         } => LauncherCommands::setup(ctx, &launcher_type, instance_id.as_deref(), false).await,
-        LauncherSubcommands::Remove { launcher_id } => LauncherCommands::remove(ctx, &launcher_id),
+        LauncherSubcommands::Remove {
+            launcher_id,
+            cascade,
+            refuse,
+        } => LauncherCommands::remove(ctx, &launcher_id, cascade, refuse),
     }
 }
 

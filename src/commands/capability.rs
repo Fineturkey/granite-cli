@@ -578,7 +578,15 @@ impl CapabilityCommands {
     /// Deletes the capability's config file and removes it from the
     /// in-memory config. After this call `capability list` will no longer
     /// show the entry.
-    pub fn remove(ctx: &mut crate::AppContext, capability_id: &str) -> Result<()> {
+    ///
+    /// `cascade` also removes everything that depends on the capability
+    /// without asking; `refuse` fails if anything depends on it.
+    pub fn remove(
+        ctx: &mut crate::AppContext,
+        capability_id: &str,
+        cascade: bool,
+        refuse: bool,
+    ) -> Result<()> {
         if ctx.config().get_capability(capability_id).is_none() {
             anyhow::bail!("No capability configured with id '{capability_id}'. Nothing to remove.");
         }
@@ -588,6 +596,8 @@ impl CapabilityCommands {
             ctx,
             RefKind::Capability,
             capability_id,
+            cascade,
+            refuse,
         )? {
             crate::commands::shared::remediation::Removal::Cancel => {
                 ctx.ui
@@ -595,7 +605,7 @@ impl CapabilityCommands {
                 return Ok(());
             }
             crate::commands::shared::remediation::Removal::Proceed { with } => {
-                crate::commands::shared::remediation::remove_all(ctx, &with)?;
+                crate::commands::shared::remediation::remove_all(ctx, &with, cascade)?;
             }
         }
 
@@ -1136,7 +1146,7 @@ mod tests {
         let mut ctx = ctx_with_capability("my-cap", "agent-model");
         assert!(ctx.config().get_capability("my-cap").is_some());
 
-        CapabilityCommands::remove(&mut ctx, "my-cap").unwrap();
+        CapabilityCommands::remove(&mut ctx, "my-cap", false, false).unwrap();
 
         assert!(ctx.config().get_capability("my-cap").is_none());
         let infos = infos!(ctx);
@@ -1150,7 +1160,7 @@ mod tests {
     #[test]
     fn remove_nonexistent_capability_returns_err() {
         let mut ctx = test_ctx();
-        let result = CapabilityCommands::remove(&mut ctx, "doesnt-exist");
+        let result = CapabilityCommands::remove(&mut ctx, "doesnt-exist", false, false);
         assert!(result.is_err());
         assert!(
             result
@@ -1164,7 +1174,7 @@ mod tests {
     fn list_does_not_show_removed_capability() {
         let _home = crate::config::TestConfigHome::new();
         let mut ctx = ctx_with_capability("my-cap", "agent-model");
-        CapabilityCommands::remove(&mut ctx, "my-cap").unwrap();
+        CapabilityCommands::remove(&mut ctx, "my-cap", false, false).unwrap();
         CapabilityCommands::list(&ctx).unwrap();
         let tables = tables!(ctx);
         let (_, _, rows) = &tables[0];
