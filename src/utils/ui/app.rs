@@ -468,20 +468,7 @@ impl App {
                     // Launch a configured launcher instance directly from Browse mode
                     if self.section == Section::Launchers {
                         if let Some(id) = self.selected_id() {
-                            if let Some(instances) = self.existing_instances(&id) {
-                                if instances.len() == 1 {
-                                    self.mode = AppMode::LaunchConfirm {
-                                        instance_id: instances[0].clone(),
-                                        yes: true,
-                                    };
-                                } else if instances.len() > 1 {
-                                    self.mode = AppMode::LaunchPick {
-                                        type_id: id,
-                                        instances,
-                                        cursor: 0,
-                                    };
-                                }
-                            }
+                            self.initiate_launch(&id);
                         }
                     }
                 }
@@ -562,21 +549,7 @@ impl App {
                 KeyCode::Char('l') => {
                     // Launch a configured launcher instance (Launchers section only)
                     if self.section == Section::Launchers {
-                        if let Some(instances) = self.existing_instances(id) {
-                            if instances.len() == 1 {
-                                self.mode = AppMode::LaunchConfirm {
-                                    instance_id: instances[0].clone(),
-                                    yes: true,
-                                };
-                            } else if instances.len() > 1 {
-                                let id = id.clone();
-                                self.mode = AppMode::LaunchPick {
-                                    type_id: id,
-                                    instances,
-                                    cursor: 0,
-                                };
-                            }
-                        }
+                        self.initiate_launch(id);
                     }
                 }
                 _ => {}
@@ -2476,6 +2449,25 @@ impl App {
         }
         instances.sort();
         Some(instances)
+    }
+
+    /// Transitions to `LaunchConfirm` (if single instance) or `LaunchPick` (if multiple instances)
+    /// for the given launcher type.
+    fn initiate_launch(&mut self, type_id: &str) {
+        if let Some(instances) = self.existing_instances(type_id) {
+            if instances.len() == 1 {
+                self.mode = AppMode::LaunchConfirm {
+                    instance_id: instances[0].clone(),
+                    yes: true,
+                };
+            } else if instances.len() > 1 {
+                self.mode = AppMode::LaunchPick {
+                    type_id: type_id.to_string(),
+                    instances,
+                    cursor: 0,
+                };
+            }
+        }
     }
 
     /// Render the instance picker list for `InstancePick` mode.
