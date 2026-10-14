@@ -1352,7 +1352,11 @@ mod run_launch_tests {
         );
 
         let result = run_launch(&mut ctx, "no-such-launcher", &[], true).await;
-
         assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Launch aborted"), "unexpected error: {msg}");
+        assert!(msg.contains("no-such-launcher"), "unexpected error: {msg}");
     }
 }
