@@ -5435,7 +5435,12 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
 
         let to_screen = |term: &ratatui::Terminal<ratatui::backend::TestBackend>| -> String {
-            term.backend().buffer().content().iter().map(|c| c.symbol()).collect()
+            term.backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|c| c.symbol())
+                .collect()
         };
 
         // LaunchPick mode
@@ -5497,14 +5502,11 @@ mod tests {
             );
             // Last word via the same helper the renderer uses — only reaches the
             // buffer if Wrap is active; clipped to one line without it.
-            let last_word = App::launch_confirm_message(
-                "my-bob",
-                "type: bob, capabilities: mcp",
-            )
-            .split_whitespace()
-            .last()
-            .unwrap()
-            .to_string();
+            let last_word = App::launch_confirm_message("my-bob", "type: bob, capabilities: mcp")
+                .split_whitespace()
+                .last()
+                .unwrap()
+                .to_string();
             assert!(
                 screen.contains(&last_word),
                 "LaunchConfirm message tail clipped (wrap missing?); \
