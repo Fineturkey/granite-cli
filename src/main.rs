@@ -729,7 +729,7 @@ async fn main() {
                 log_json,
                 log_thread_id,
             );
-            run_interactive_tui(ctx)
+            run_interactive_tui(ctx, log_level.parse().unwrap(), &log_filters)
                 .await
                 .map_err(|e| eprintln!("Error: {e}"))
         }

@@ -2590,7 +2590,11 @@ impl App {
 }
 
 /// Launch the interactive TUI application. Runs until the user quits.
-pub async fn run_interactive_tui(ctx: crate::AppContext) -> anyhow::Result<()> {
+pub async fn run_interactive_tui(
+    ctx: crate::AppContext,
+    log_level: alog::Level,
+    log_filters: &str,
+) -> anyhow::Result<()> {
     // Silence the global logger for the entire TUI session.  The logger is
     // wired to TerminalOutput which calls println! directly — any log line
     // emitted from a setup task thread would write to stdout while ratatui
@@ -2665,17 +2669,17 @@ pub async fn run_interactive_tui(ctx: crate::AppContext) -> anyhow::Result<()> {
             AppAction::Launch(launcher_id) => {
                 // Restore terminal before launching
                 restore_terminal(terminal)?;
+                alog::adjust_levels(log_level, AlogFilters::Spec(log_filters.to_string()));
                 // Run the launch command (takes ownership of the context)
                 let mut ctx = app.ctx;
-                crate::run_launch(&mut ctx, &launcher_id, &[], false).await?;
-                // Exit TUI after launch
-                return Ok(());
+                return crate::run_launch(&mut ctx, &launcher_id, &[], false).await;
             }
             AppAction::None => {}
         }
     }
 
     restore_terminal(terminal)?;
+    alog::adjust_levels(log_level, AlogFilters::Spec(log_filters.to_string()));
     Ok(())
 }
 
