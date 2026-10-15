@@ -8,7 +8,9 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, TableState},
+    widgets::{
+        Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, TableState, Wrap,
+    },
 };
 
 use crate::commands::{
@@ -1767,7 +1769,7 @@ impl App {
                             .borders(Borders::ALL)
                             .title(" Hardware Profile "),
                     )
-                    .wrap(ratatui::widgets::Wrap { trim: false })
+                    .wrap(Wrap { trim: false })
                     .scroll((self.detail_scroll as u16, 0));
                 frame.render_widget(para, table_area);
             }
@@ -1906,7 +1908,7 @@ impl App {
                                 .borders(Borders::ALL)
                                 .title(format!(" {id} — Session Detail ")),
                         )
-                        .wrap(ratatui::widgets::Wrap { trim: false })
+                        .wrap(Wrap { trim: false })
                         .scroll((self.detail_scroll as u16, 0));
                     frame.render_widget(meta_para, chunks[0]);
 
@@ -2303,7 +2305,7 @@ impl App {
                     .borders(Borders::ALL)
                     .title(format!(" {id} — Detail ")),
             )
-            .wrap(ratatui::widgets::Wrap { trim: false })
+            .wrap(Wrap { trim: false })
             .scroll((self.detail_scroll as u16, 0));
         frame.render_widget(para, area);
     }
@@ -2499,6 +2501,24 @@ impl App {
         frame.render_stateful_widget(list, area, &mut list_state);
     }
 
+    const CONFIRM_LAUNCH_TITLE: &str = "Confirm Launch";
+    const LAUNCH_PICK_TITLE_SUFFIX: &str = "Launch instance";
+
+    /// Build the confirmation message shown in `LaunchConfirm` mode.
+    /// `details` is the pre-formatted launcher detail string, or empty when the
+    /// instance id is unknown.
+    fn launch_confirm_message(instance_id: &str, details: &str) -> String {
+        if details.is_empty() {
+            format!(
+                "You're about to launch \"{instance_id}\" and close the granite-cli TUI. Proceed?"
+            )
+        } else {
+            format!(
+                "You're about to launch \"{instance_id}\" ({details}) and close the granite-cli TUI. Proceed?"
+            )
+        }
+    }
+
     /// Render the launch picker list for `LaunchPick` mode.
     fn render_launch_pick(
         &self,
@@ -2527,7 +2547,7 @@ impl App {
         let list = List::new(list_items).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(format!(" {type_id} — Launch instance ")),
+                .title(format!(" {type_id} — {} ", Self::LAUNCH_PICK_TITLE_SUFFIX)),
         );
         let mut list_state = ListState::default();
         list_state.select(Some(cursor));
@@ -2560,15 +2580,7 @@ impl App {
             String::new()
         };
 
-        let message = if details.is_empty() {
-            format!(
-                "You're about to launch \"{instance_id}\" and close the granite-cli TUI. Proceed?"
-            )
-        } else {
-            format!(
-                "You're about to launch \"{instance_id}\" ({details}) and close the granite-cli TUI. Proceed?"
-            )
-        };
+        let message = Self::launch_confirm_message(instance_id, &details);
 
         let lines = vec![
             Line::from(message),
@@ -2580,10 +2592,10 @@ impl App {
             ]),
         ];
 
-        let para = Paragraph::new(lines).block(
+        let para = Paragraph::new(lines).wrap(Wrap { trim: true }).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Confirm Launch "),
+                .title(format!(" {} ", Self::CONFIRM_LAUNCH_TITLE)),
         );
         frame.render_widget(para, area);
     }
@@ -5422,15 +5434,34 @@ mod tests {
         let backend = ratatui::backend::TestBackend::new(80, 24);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
 
-        // Render LaunchPick mode
+        let to_screen = |term: &ratatui::Terminal<ratatui::backend::TestBackend>| -> String {
+            term.backend().buffer().content().iter().map(|c| c.symbol()).collect()
+        };
+
+        // LaunchPick mode
         a.mode = AppMode::LaunchPick {
             type_id: "bob".to_string(),
             instances: vec!["my-bob-1".to_string(), "my-bob-2".to_string()],
             cursor: 0,
         };
         terminal.draw(|f| a.render(f)).unwrap();
+        {
+            let screen = to_screen(&terminal);
+            assert!(
+                screen.contains(App::LAUNCH_PICK_TITLE_SUFFIX),
+                "LaunchPick title missing; screen: {screen:?}"
+            );
+            assert!(
+                screen.contains("▶ my-bob-1"),
+                "LaunchPick cursor row missing; screen: {screen:?}"
+            );
+            assert!(
+                screen.contains("my-bob-2"),
+                "LaunchPick second instance missing; screen: {screen:?}"
+            );
+        }
 
-        // Render LaunchConfirm mode (yes = true, with capabilities)
+        // LaunchConfirm mode (yes = true, with capabilities)
         let mut config = Config::default();
         config.launchers.insert(
             "my-bob".to_string(),
@@ -5450,20 +5481,104 @@ mod tests {
             yes: true,
         };
         terminal.draw(|f| a2.render(f)).unwrap();
+        {
+            let screen = to_screen(&terminal);
+            assert!(
+                screen.contains(App::CONFIRM_LAUNCH_TITLE),
+                "LaunchConfirm title missing; screen: {screen:?}"
+            );
+            assert!(
+                screen.contains("my-bob"),
+                "LaunchConfirm instance id missing; screen: {screen:?}"
+            );
+            assert!(
+                screen.contains("mcp"),
+                "LaunchConfirm capability missing; screen: {screen:?}"
+            );
+            // Last word via the same helper the renderer uses — only reaches the
+            // buffer if Wrap is active; clipped to one line without it.
+            let last_word = App::launch_confirm_message(
+                "my-bob",
+                "type: bob, capabilities: mcp",
+            )
+            .split_whitespace()
+            .last()
+            .unwrap()
+            .to_string();
+            assert!(
+                screen.contains(&last_word),
+                "LaunchConfirm message tail clipped (wrap missing?); \
+                 last word: {last_word:?}; screen: {screen:?}"
+            );
+            assert!(
+                screen.contains("▶ Yes"),
+                "LaunchConfirm Yes cursor missing; screen: {screen:?}"
+            );
+            assert!(
+                screen.contains("No"),
+                "LaunchConfirm No button missing; screen: {screen:?}"
+            );
+        }
 
-        // Render LaunchConfirm mode (yes = false, without capabilities)
+        // LaunchConfirm mode (yes = false, without capabilities)
         a.mode = AppMode::LaunchConfirm {
             instance_id: "my-bob".to_string(),
             yes: false,
         };
         terminal.draw(|f| a.render(f)).unwrap();
+        {
+            let screen = to_screen(&terminal);
+            assert!(
+                screen.contains(App::CONFIRM_LAUNCH_TITLE),
+                "LaunchConfirm(no) title missing; screen: {screen:?}"
+            );
+            assert!(
+                screen.contains("my-bob"),
+                "LaunchConfirm(no) instance id missing; screen: {screen:?}"
+            );
+            let last_word = App::launch_confirm_message("my-bob", "")
+                .split_whitespace()
+                .last()
+                .unwrap()
+                .to_string();
+            assert!(
+                screen.contains(&last_word),
+                "LaunchConfirm(no) message tail clipped (wrap missing?); \
+                 last word: {last_word:?}; screen: {screen:?}"
+            );
+            assert!(
+                screen.contains("▶ No"),
+                "LaunchConfirm No cursor missing; screen: {screen:?}"
+            );
+        }
 
-        // Render LaunchConfirm mode for non-existent launcher id
+        // LaunchConfirm mode for non-existent launcher id
         a.mode = AppMode::LaunchConfirm {
             instance_id: "unknown".to_string(),
             yes: true,
         };
         terminal.draw(|f| a.render(f)).unwrap();
+        {
+            let screen = to_screen(&terminal);
+            assert!(
+                screen.contains(App::CONFIRM_LAUNCH_TITLE),
+                "LaunchConfirm(unknown) title missing; screen: {screen:?}"
+            );
+            assert!(
+                screen.contains("unknown"),
+                "LaunchConfirm(unknown) instance id missing; screen: {screen:?}"
+            );
+            let last_word = App::launch_confirm_message("unknown", "")
+                .split_whitespace()
+                .last()
+                .unwrap()
+                .to_string();
+            assert!(
+                screen.contains(&last_word),
+                "LaunchConfirm(unknown) message tail clipped (wrap missing?); \
+                 last word: {last_word:?}; screen: {screen:?}"
+            );
+        }
     }
 
     #[test]
