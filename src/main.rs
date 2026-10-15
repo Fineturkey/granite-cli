@@ -21,6 +21,7 @@ use alog::{MessageLevel, alog};
 use clap::{CommandFactory, Parser, Subcommand};
 
 // Local
+use commands::shared::remediation::DependentsPolicy;
 use commands::{
     CapabilityCommands, HardwareCommands, LauncherCommands, ModelCommands, ProviderCommands,
     SetupCommands,
@@ -265,13 +266,13 @@ enum ModelSubcommands {
         /// Configured model ID to remove
         model_id: String,
 
-        /// Also remove everything that depends on it, without asking
-        #[arg(long, conflicts_with = "refuse")]
-        cascade: bool,
-
-        /// Refuse to remove it, exiting non-zero, if anything depends on it
-        #[arg(long, conflicts_with = "cascade")]
-        refuse: bool,
+        /// How to handle other configured instances that depend on this model.
+        /// `cascade` removes them too; `refuse` aborts with a non-zero exit;
+        /// `leave` removes only this model and leaves dependents broken.
+        /// Omitting the flag prompts interactively, or behaves like `leave`
+        /// when there is no terminal to ask.
+        #[arg(long, value_name = "POLICY")]
+        dependents: Option<DependentsPolicy>,
     },
 }
 
@@ -306,13 +307,13 @@ enum CapabilitySubcommands {
         /// Configured capability ID to remove
         capability_id: String,
 
-        /// Also remove everything that depends on it, without asking
-        #[arg(long, conflicts_with = "refuse")]
-        cascade: bool,
-
-        /// Refuse to remove it, exiting non-zero, if anything depends on it
-        #[arg(long, conflicts_with = "cascade")]
-        refuse: bool,
+        /// How to handle other configured instances that depend on this
+        /// capability. `cascade` removes them too; `refuse` aborts with a
+        /// non-zero exit; `leave` removes only this capability and leaves
+        /// dependents broken. Omitting the flag prompts interactively, or
+        /// behaves like `leave` when there is no terminal to ask.
+        #[arg(long, value_name = "POLICY")]
+        dependents: Option<DependentsPolicy>,
     },
 }
 
@@ -357,13 +358,13 @@ enum ProviderSubcommands {
         /// Configured provider instance ID to remove
         provider_id: String,
 
-        /// Also remove everything that depends on it, without asking
-        #[arg(long, conflicts_with = "refuse")]
-        cascade: bool,
-
-        /// Refuse to remove it, exiting non-zero, if anything depends on it
-        #[arg(long, conflicts_with = "cascade")]
-        refuse: bool,
+        /// How to handle other configured instances that depend on this
+        /// provider. `cascade` removes them too; `refuse` aborts with a
+        /// non-zero exit; `leave` removes only this provider and leaves
+        /// dependents broken. Omitting the flag prompts interactively, or
+        /// behaves like `leave` when there is no terminal to ask.
+        #[arg(long, value_name = "POLICY")]
+        dependents: Option<DependentsPolicy>,
     },
 }
 
@@ -398,13 +399,13 @@ enum LauncherSubcommands {
         /// Configured launcher instance ID to remove
         launcher_id: String,
 
-        /// Also remove everything that depends on it, without asking
-        #[arg(long, conflicts_with = "refuse")]
-        cascade: bool,
-
-        /// Refuse to remove it, exiting non-zero, if anything depends on it
-        #[arg(long, conflicts_with = "cascade")]
-        refuse: bool,
+        /// How to handle other configured instances that depend on this
+        /// launcher. `cascade` removes them too; `refuse` aborts with a
+        /// non-zero exit; `leave` removes only this launcher and leaves
+        /// dependents broken. Omitting the flag prompts interactively, or
+        /// behaves like `leave` when there is no terminal to ask.
+        #[arg(long, value_name = "POLICY")]
+        dependents: Option<DependentsPolicy>,
     },
 }
 
@@ -790,9 +791,8 @@ async fn run_model_command(ctx: &mut AppContext, subcmd: ModelSubcommands) -> an
         ModelSubcommands::Pull { model_id } => ModelCommands::pull(ctx, &model_id).await,
         ModelSubcommands::Remove {
             model_id,
-            cascade,
-            refuse,
-        } => ModelCommands::remove(ctx, &model_id, cascade, refuse),
+            dependents,
+        } => ModelCommands::remove(ctx, &model_id, dependents),
     }
 }
 
@@ -812,9 +812,8 @@ async fn run_capability_command(
         } => CapabilityCommands::setup(ctx, &capability_type, instance_id.as_deref(), false).await,
         CapabilitySubcommands::Remove {
             capability_id,
-            cascade,
-            refuse,
-        } => CapabilityCommands::remove(ctx, &capability_id, cascade, refuse),
+            dependents,
+        } => CapabilityCommands::remove(ctx, &capability_id, dependents),
     }
 }
 
@@ -835,9 +834,8 @@ async fn run_provider_command(
         }
         ProviderSubcommands::Remove {
             provider_id,
-            cascade,
-            refuse,
-        } => ProviderCommands::remove(ctx, &provider_id, cascade, refuse),
+            dependents,
+        } => ProviderCommands::remove(ctx, &provider_id, dependents),
     }
 }
 
@@ -855,9 +853,8 @@ async fn run_launcher_command(
         } => LauncherCommands::setup(ctx, &launcher_type, instance_id.as_deref(), false).await,
         LauncherSubcommands::Remove {
             launcher_id,
-            cascade,
-            refuse,
-        } => LauncherCommands::remove(ctx, &launcher_id, cascade, refuse),
+            dependents,
+        } => LauncherCommands::remove(ctx, &launcher_id, dependents),
     }
 }
 

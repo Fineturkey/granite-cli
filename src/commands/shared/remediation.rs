@@ -88,6 +88,25 @@ pub(crate) fn prompt_with_current(
     }
 }
 
+/// How a removal command should behave when other configured instances point
+/// at the entity being removed.
+///
+/// Passed as `--dependents <cascade|refuse|leave>` on the CLI. When the flag
+/// is omitted the caller passes `None` and the behaviour falls back to asking
+/// interactively (or leaving dependents stranded in non-interactive sessions).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DependentsPolicy {
+    /// Remove the target and every dependent automatically, without asking.
+    /// Cascades recursively so dependents-of-dependents are taken too.
+    Cascade,
+    /// Refuse to remove the target and exit with code 1 if anything depends
+    /// on it.
+    Refuse,
+    /// Remove only the target. Dependents are left configured but broken.
+    /// This is the non-interactive default when no flag is given.
+    Leave,
+}
+
 /// What a removal should do about the instances pointing at what is being
 /// removed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,55 +121,83 @@ pub(crate) enum Removal {
 /// Asks what to do about the instances that point at `(kind, id)` before a
 /// removal strands them.
 ///
-/// `cascade` and `refuse` correspond to the `--cascade` / `--refuse` CLI
-/// flags and are mutually exclusive.
+/// `policy` is `Some(DependentsPolicy::...)` when a `--dependents` flag was
+/// given, or `None` to fall back to the session's default:
 ///
-/// - `refuse`: if anything depends on the target, returns an error
-///   immediately, which causes the process to exit with code 1.
-/// - `cascade`: if anything depends on the target, returns
-///   `Proceed { with: stranded }` without prompting.
-/// - neither flag, non-interactive session: warns about what would break and
-///   removes only the target (existing behaviour kept for `--output json` /
-///   `--output markdown`).
-/// - neither flag, interactive session: prompts the user.
+/// - `Some(Refuse)`: fails immediately with a non-zero exit if anything
+///   depends on the target. Nothing is removed or printed beyond the error.
+/// - `Some(Cascade)`: removes the target and all dependents automatically,
+///   reporting what will be removed before doing so.
+/// - `Some(Leave)`: removes only the target; warns about what was left
+///   broken. Same as the old non-interactive fallback.
+/// - `None`, interactive session: prompts the user with three choices.
+/// - `None`, non-interactive session (`--output json` / `--output markdown`):
+///   same as `Leave` — warns and removes only the target.
 pub(crate) fn confirm_removal(
     ctx: &crate::AppContext,
     kind: RefKind,
     id: &str,
-    cascade: bool,
-    refuse: bool,
+    policy: Option<DependentsPolicy>,
 ) -> Result<Removal> {
     let stranded = dependents(kind, id, ctx.config());
     if stranded.is_empty() {
         return Ok(Removal::Proceed { with: stranded });
     }
 
-    ctx.ui.warn(&format!("Removing {kind} '{id}' will break:"));
-    for (dependent_kind, dependent_id) in &stranded {
-        let type_suffix = type_name(*dependent_kind, dependent_id, ctx.config())
-            .map(|t| format!(" ({t})"))
-            .unwrap_or_default();
-        ctx.ui.info(&format!(
-            "  - {dependent_kind} '{dependent_id}'{type_suffix}"
-        ));
+    match policy {
+        Some(DependentsPolicy::Refuse) | None if !ctx.ui.is_interactive() => {
+            anyhow::bail!(
+                "Cannot remove {kind} '{id}' because other configured instances depend on it. \
+                 Pass --dependents cascade, --dependents leave, or --dependents refuse."
+            );
+        }
+        Some(DependentsPolicy::Refuse) => {
+            anyhow::bail!(
+                "Cannot remove {kind} '{id}' because other configured instances depend on it."
+            );
+        }
+        Some(DependentsPolicy::Cascade) => {
+            ctx.ui
+                .warn(&format!("Removing {kind} '{id}' and its dependents:"));
+            for (dependent_kind, dependent_id) in &stranded {
+                let type_suffix = type_name(*dependent_kind, dependent_id, ctx.config())
+                    .map(|t| format!(" ({t})"))
+                    .unwrap_or_default();
+                ctx.ui.info(&format!(
+                    "  - {dependent_kind} '{dependent_id}'{type_suffix}"
+                ));
+            }
+            return Ok(Removal::Proceed { with: stranded });
+        }
+        Some(DependentsPolicy::Leave) => {
+            ctx.ui.warn(&format!("Removing {kind} '{id}' will break:"));
+            for (dependent_kind, dependent_id) in &stranded {
+                let type_suffix = type_name(*dependent_kind, dependent_id, ctx.config())
+                    .map(|t| format!(" ({t})"))
+                    .unwrap_or_default();
+                ctx.ui.info(&format!(
+                    "  - {dependent_kind} '{dependent_id}'{type_suffix}"
+                ));
+            }
+            ctx.ui.warn(&format!(
+                "Removing only {kind} '{id}'. What depended on it needs fixing."
+            ));
+            return Ok(Removal::Proceed { with: Vec::new() });
+        }
+        None => {
+            ctx.ui.warn(&format!("Removing {kind} '{id}' will break:"));
+            for (dependent_kind, dependent_id) in &stranded {
+                let type_suffix = type_name(*dependent_kind, dependent_id, ctx.config())
+                    .map(|t| format!(" ({t})"))
+                    .unwrap_or_default();
+                ctx.ui.info(&format!(
+                    "  - {dependent_kind} '{dependent_id}'{type_suffix}"
+                ));
+            }
+        }
     }
 
-    if refuse {
-        anyhow::bail!(
-            "Cannot remove {kind} '{id}' because other configured instances depend on it."
-        );
-    }
-
-    if cascade {
-        return Ok(Removal::Proceed { with: stranded });
-    }
-
-    if !ctx.ui.is_interactive() {
-        ctx.ui.warn(&format!(
-            "Removing only {kind} '{id}'. What depended on it needs fixing."
-        ));
-        return Ok(Removal::Proceed { with: Vec::new() });
-    }
+    // Only reachable when policy is None and the session is interactive.
 
     let together = match stranded.as_slice() {
         [(dependent_kind, dependent_id)] => {
@@ -179,15 +226,15 @@ pub(crate) fn confirm_removal(
 /// Removes each instance through its own removal command, so anything
 /// depending on *them* gets the same question in turn.
 ///
-/// `cascade` is threaded down so that second-level dependents are also
-/// removed automatically when the original call used `--cascade`.
+/// `policy` is threaded down so that second-level dependents are also
+/// removed automatically when the original call used `--dependents cascade`.
 pub(crate) fn remove_all(
     ctx: &mut crate::AppContext,
     ids: &[(RefKind, String)],
-    cascade: bool,
+    policy: Option<DependentsPolicy>,
 ) -> Result<()> {
     for (kind, id) in ids {
-        remove(ctx, *kind, id, cascade)?;
+        remove(ctx, *kind, id, policy)?;
     }
     Ok(())
 }
@@ -268,7 +315,7 @@ pub(crate) async fn remediate(
             }
             Choice::Remove => {
                 previous = Some(error);
-                remove(ctx, fix.kind, &fix.id, false)?;
+                remove(ctx, fix.kind, &fix.id, None)?;
             }
             Choice::Disable => {
                 previous = Some(error);
@@ -650,12 +697,17 @@ fn disable(ctx: &mut crate::AppContext, fix: &Fix) -> Result<()> {
     Ok(())
 }
 
-fn remove(ctx: &mut crate::AppContext, kind: RefKind, id: &str, cascade: bool) -> Result<()> {
+fn remove(
+    ctx: &mut crate::AppContext,
+    kind: RefKind,
+    id: &str,
+    policy: Option<DependentsPolicy>,
+) -> Result<()> {
     match kind {
-        RefKind::Launcher => LauncherCommands::remove(ctx, id, cascade, false),
-        RefKind::Capability => CapabilityCommands::remove(ctx, id, cascade, false),
-        RefKind::Model => ModelCommands::remove(ctx, id, cascade, false),
-        RefKind::Provider => ProviderCommands::remove(ctx, id, cascade, false),
+        RefKind::Launcher => LauncherCommands::remove(ctx, id, policy),
+        RefKind::Capability => CapabilityCommands::remove(ctx, id, policy),
+        RefKind::Model => ModelCommands::remove(ctx, id, policy),
+        RefKind::Provider => ProviderCommands::remove(ctx, id, policy),
     }
 }
 
@@ -861,7 +913,7 @@ mod tests {
         let mut ctx = ctx_model_with_one_dependent();
         answer(&ctx, &[0]);
 
-        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", false, false).unwrap();
+        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", None).unwrap();
 
         assert!(ctx.config().get_model("granite-3.1-8b-instruct").is_none());
         assert!(ctx.config().get_capability("chat").is_none());
@@ -873,7 +925,7 @@ mod tests {
         let mut ctx = ctx_model_with_one_dependent();
         answer(&ctx, &[1]);
 
-        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", false, false).unwrap();
+        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", None).unwrap();
 
         assert!(ctx.config().get_model("granite-3.1-8b-instruct").is_some());
         assert!(ctx.config().get_capability("chat").is_some());
@@ -885,7 +937,7 @@ mod tests {
         let mut ctx = ctx_model_with_one_dependent();
         answer(&ctx, &[2]);
 
-        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", false, false).unwrap();
+        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", None).unwrap();
 
         assert!(ctx.config().get_model("granite-3.1-8b-instruct").is_none());
         // Left in place, and now dangling, which `capability list` reports.
@@ -894,17 +946,40 @@ mod tests {
     }
 
     #[test]
-    fn a_session_with_nobody_to_ask_removes_only_what_was_asked() {
+    fn a_session_with_nobody_to_ask_refuses_when_dependents_exist() {
+        // Non-interactive sessions default to refuse so scripts fail loudly
+        // rather than silently stranding dependents.
         let _home = crate::config::TestConfigHome::new();
         let mut ctx = ctx_model_with_one_dependent();
         *capture(&ctx).interactive.borrow_mut() = Some(false);
 
-        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", false, false).unwrap();
+        let err = ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", None).unwrap_err();
+
+        assert!(prompts(&ctx).is_empty());
+        assert!(err.to_string().contains("Pass --dependents"), "got: {err}");
+        // Nothing was removed.
+        assert!(ctx.config().get_model("granite-3.1-8b-instruct").is_some());
+        assert!(ctx.config().get_capability("chat").is_some());
+    }
+
+    #[test]
+    fn a_non_interactive_session_with_leave_removes_only_what_was_asked() {
+        // Explicit --dependents leave preserves the old non-interactive
+        // behaviour for scripts that want it.
+        let _home = crate::config::TestConfigHome::new();
+        let mut ctx = ctx_model_with_one_dependent();
+        *capture(&ctx).interactive.borrow_mut() = Some(false);
+
+        ModelCommands::remove(
+            &mut ctx,
+            "granite-3.1-8b-instruct",
+            Some(DependentsPolicy::Leave),
+        )
+        .unwrap();
 
         assert!(prompts(&ctx).is_empty());
         assert!(ctx.config().get_model("granite-3.1-8b-instruct").is_none());
         assert!(ctx.config().get_capability("chat").is_some());
-        // The user is told what was broken even though nothing was asked.
         let warns = capture(&ctx).warns.borrow().clone();
         assert!(warns.iter().any(|w| w.contains("will break")), "{warns:?}");
     }
@@ -914,7 +989,7 @@ mod tests {
         let _home = crate::config::TestConfigHome::new();
         let mut ctx = ctx_model_with_one_dependent();
 
-        CapabilityCommands::remove(&mut ctx, "chat", false, false).unwrap();
+        CapabilityCommands::remove(&mut ctx, "chat", None).unwrap();
 
         assert!(prompts(&ctx).is_empty());
         assert!(ctx.config().get_capability("chat").is_none());
@@ -925,7 +1000,12 @@ mod tests {
         let mut ctx = ctx_model_with_one_dependent();
         *capture(&ctx).interactive.borrow_mut() = Some(false);
 
-        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", true, false).unwrap();
+        ModelCommands::remove(
+            &mut ctx,
+            "granite-3.1-8b-instruct",
+            Some(DependentsPolicy::Cascade),
+        )
+        .unwrap();
 
         assert!(prompts(&ctx).is_empty());
         assert!(ctx.config().get_model("granite-3.1-8b-instruct").is_none());
@@ -937,7 +1017,12 @@ mod tests {
         let _home = crate::config::TestConfigHome::new();
         let mut ctx = ctx_model_with_one_dependent();
 
-        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", true, false).unwrap();
+        ModelCommands::remove(
+            &mut ctx,
+            "granite-3.1-8b-instruct",
+            Some(DependentsPolicy::Cascade),
+        )
+        .unwrap();
 
         assert!(prompts(&ctx).is_empty());
         assert!(ctx.config().get_model("granite-3.1-8b-instruct").is_none());
@@ -952,7 +1037,7 @@ mod tests {
         let mut ctx = ctx_model_with_one_dependent();
         *capture(&ctx).interactive.borrow_mut() = Some(false);
 
-        ProviderCommands::remove(&mut ctx, "ollama", true, false).unwrap();
+        ProviderCommands::remove(&mut ctx, "ollama", Some(DependentsPolicy::Cascade)).unwrap();
 
         assert!(prompts(&ctx).is_empty());
         assert!(ctx.config().get_provider("ollama").is_none());
@@ -966,8 +1051,12 @@ mod tests {
         let mut ctx = ctx_model_with_one_dependent();
         *capture(&ctx).interactive.borrow_mut() = Some(false);
 
-        let err =
-            ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", false, true).unwrap_err();
+        let err = ModelCommands::remove(
+            &mut ctx,
+            "granite-3.1-8b-instruct",
+            Some(DependentsPolicy::Refuse),
+        )
+        .unwrap_err();
 
         assert!(
             err.to_string().contains("Cannot remove model"),
@@ -983,7 +1072,11 @@ mod tests {
         let _home = crate::config::TestConfigHome::new();
         let mut ctx = ctx_model_with_one_dependent();
 
-        let result = ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", false, true);
+        let result = ModelCommands::remove(
+            &mut ctx,
+            "granite-3.1-8b-instruct",
+            Some(DependentsPolicy::Refuse),
+        );
 
         assert!(result.is_err());
         assert!(prompts(&ctx).is_empty());
@@ -995,7 +1088,7 @@ mod tests {
         let _home = crate::config::TestConfigHome::new();
         let mut ctx = ctx_model_with_one_dependent();
 
-        CapabilityCommands::remove(&mut ctx, "chat", false, true).unwrap();
+        CapabilityCommands::remove(&mut ctx, "chat", Some(DependentsPolicy::Refuse)).unwrap();
 
         assert!(ctx.config().get_capability("chat").is_none());
     }

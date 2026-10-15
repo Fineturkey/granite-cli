@@ -937,13 +937,13 @@ impl ModelCommands {
     /// Deletes the model's config file and removes it from the in-memory
     /// config. After this call `model list` will no longer show the entry.
     ///
-    /// `cascade` also removes everything that depends on the model without
-    /// asking; `refuse` fails if anything depends on it.
+    /// `policy` controls what happens to dependents: `Cascade` removes them
+    /// too, `Refuse` aborts, `Leave` strands them. `None` asks interactively
+    /// or leaves in non-interactive sessions.
     pub fn remove(
         ctx: &mut crate::AppContext,
         model_id: &str,
-        cascade: bool,
-        refuse: bool,
+        policy: Option<crate::commands::shared::remediation::DependentsPolicy>,
     ) -> Result<()> {
         if ctx.config().get_model(model_id).is_none() {
             anyhow::bail!("No model configured with id '{model_id}'. Nothing to remove.");
@@ -954,15 +954,14 @@ impl ModelCommands {
             ctx,
             RefKind::Model,
             model_id,
-            cascade,
-            refuse,
+            policy,
         )? {
             crate::commands::shared::remediation::Removal::Cancel => {
                 ctx.ui.info(&format!("Keeping model '{model_id}'."));
                 return Ok(());
             }
             crate::commands::shared::remediation::Removal::Proceed { with } => {
-                crate::commands::shared::remediation::remove_all(ctx, &with, cascade)?;
+                crate::commands::shared::remediation::remove_all(ctx, &with, policy)?;
             }
         }
 
@@ -1953,7 +1952,7 @@ mod tests {
         let mut ctx = ctx_with_model("granite-3.1-8b-instruct", Some("my-ollama"));
         assert!(ctx.config().get_model("granite-3.1-8b-instruct").is_some());
 
-        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", false, false).unwrap();
+        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", None).unwrap();
 
         assert!(ctx.config().get_model("granite-3.1-8b-instruct").is_none());
         let infos = infos!(ctx);
@@ -1967,7 +1966,7 @@ mod tests {
     #[test]
     fn remove_nonexistent_model_returns_err() {
         let mut ctx = empty_ctx();
-        let result = ModelCommands::remove(&mut ctx, "doesnt-exist", false, false);
+        let result = ModelCommands::remove(&mut ctx, "doesnt-exist", None);
         assert!(result.is_err());
         assert!(
             result
@@ -1981,7 +1980,7 @@ mod tests {
     fn list_does_not_show_removed_model() {
         let _home = crate::config::TestConfigHome::new();
         let mut ctx = ctx_with_model("granite-3.1-8b-instruct", Some("my-ollama"));
-        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", false, false).unwrap();
+        ModelCommands::remove(&mut ctx, "granite-3.1-8b-instruct", None).unwrap();
         ModelCommands::list(&ctx, None).unwrap();
         let tables = tables!(ctx);
         let (_, _, rows) = &tables[0];
