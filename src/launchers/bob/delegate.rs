@@ -17,7 +17,8 @@ use std::sync::Arc;
 // Third Party
 use rmcp::model::{
     CacheScope, CallToolRequestMethod, CallToolRequestParams, CallToolResult, ContentBlock,
-    ListToolsResult, PaginatedRequestParams, ProtocolVersion, ServerCapabilities, ServerInfo, Tool,
+    ListToolsResult, PaginatedRequestParams, ProtocolVersion, ServerCapabilities, ServerConfig,
+    Tool,
 };
 use rmcp::service::{MaybeSendFuture, RequestContext};
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
@@ -202,8 +203,8 @@ impl DelegateToolRegistry {
 }
 
 impl ServerHandler for DelegateToolRegistry {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
     }
 
     async fn list_tools(
