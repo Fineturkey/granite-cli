@@ -21,6 +21,7 @@ use alog::{MessageLevel, alog};
 use clap::{CommandFactory, Parser, Subcommand};
 
 // Local
+use commands::shared::remediation::DependentsPolicy;
 use commands::{
     CapabilityCommands, HardwareCommands, LauncherCommands, ModelCommands, ProviderCommands,
     SetupCommands,
@@ -264,6 +265,14 @@ enum ModelSubcommands {
     Remove {
         /// Configured model ID to remove
         model_id: String,
+
+        /// How to handle other configured instances that depend on this model.
+        /// `cascade` removes them too; `refuse` aborts with a non-zero exit;
+        /// `leave` removes only this model and leaves dependents broken.
+        /// Omitting the flag prompts interactively, or behaves like `leave`
+        /// when there is no terminal to ask.
+        #[arg(long, value_name = "POLICY")]
+        dependents: Option<DependentsPolicy>,
     },
 }
 
@@ -297,6 +306,14 @@ enum CapabilitySubcommands {
     Remove {
         /// Configured capability ID to remove
         capability_id: String,
+
+        /// How to handle other configured instances that depend on this
+        /// capability. `cascade` removes them too; `refuse` aborts with a
+        /// non-zero exit; `leave` removes only this capability and leaves
+        /// dependents broken. Omitting the flag prompts interactively, or
+        /// behaves like `leave` when there is no terminal to ask.
+        #[arg(long, value_name = "POLICY")]
+        dependents: Option<DependentsPolicy>,
     },
 }
 
@@ -340,6 +357,14 @@ enum ProviderSubcommands {
     Remove {
         /// Configured provider instance ID to remove
         provider_id: String,
+
+        /// How to handle other configured instances that depend on this
+        /// provider. `cascade` removes them too; `refuse` aborts with a
+        /// non-zero exit; `leave` removes only this provider and leaves
+        /// dependents broken. Omitting the flag prompts interactively, or
+        /// behaves like `leave` when there is no terminal to ask.
+        #[arg(long, value_name = "POLICY")]
+        dependents: Option<DependentsPolicy>,
     },
 }
 
@@ -373,6 +398,14 @@ enum LauncherSubcommands {
     Remove {
         /// Configured launcher instance ID to remove
         launcher_id: String,
+
+        /// How to handle other configured instances that depend on this
+        /// launcher. `cascade` removes them too; `refuse` aborts with a
+        /// non-zero exit; `leave` removes only this launcher and leaves
+        /// dependents broken. Omitting the flag prompts interactively, or
+        /// behaves like `leave` when there is no terminal to ask.
+        #[arg(long, value_name = "POLICY")]
+        dependents: Option<DependentsPolicy>,
     },
 }
 
@@ -729,7 +762,7 @@ async fn main() {
                 log_json,
                 log_thread_id,
             );
-            run_interactive_tui(ctx)
+            run_interactive_tui(ctx, log_level.parse().unwrap(), &log_filters)
                 .await
                 .map_err(|e| eprintln!("Error: {e}"))
         }
@@ -756,7 +789,10 @@ async fn run_model_command(ctx: &mut AppContext, subcmd: ModelSubcommands) -> an
             instance_id,
         } => ModelCommands::setup(ctx, &model_type, instance_id.as_deref(), false).await,
         ModelSubcommands::Pull { model_id } => ModelCommands::pull(ctx, &model_id).await,
-        ModelSubcommands::Remove { model_id } => ModelCommands::remove(ctx, &model_id),
+        ModelSubcommands::Remove {
+            model_id,
+            dependents,
+        } => ModelCommands::remove(ctx, &model_id, dependents),
     }
 }
 
@@ -774,9 +810,10 @@ async fn run_capability_command(
             capability_type,
             instance_id,
         } => CapabilityCommands::setup(ctx, &capability_type, instance_id.as_deref(), false).await,
-        CapabilitySubcommands::Remove { capability_id } => {
-            CapabilityCommands::remove(ctx, &capability_id)
-        }
+        CapabilitySubcommands::Remove {
+            capability_id,
+            dependents,
+        } => CapabilityCommands::remove(ctx, &capability_id, dependents),
     }
 }
 
@@ -795,7 +832,10 @@ async fn run_provider_command(
         ProviderSubcommands::Health { provider_id } => {
             ProviderCommands::health(ctx, provider_id.as_deref()).await
         }
-        ProviderSubcommands::Remove { provider_id } => ProviderCommands::remove(ctx, &provider_id),
+        ProviderSubcommands::Remove {
+            provider_id,
+            dependents,
+        } => ProviderCommands::remove(ctx, &provider_id, dependents),
     }
 }
 
@@ -811,11 +851,14 @@ async fn run_launcher_command(
             launcher_type,
             instance_id,
         } => LauncherCommands::setup(ctx, &launcher_type, instance_id.as_deref(), false).await,
-        LauncherSubcommands::Remove { launcher_id } => LauncherCommands::remove(ctx, &launcher_id),
+        LauncherSubcommands::Remove {
+            launcher_id,
+            dependents,
+        } => LauncherCommands::remove(ctx, &launcher_id, dependents),
     }
 }
 
-async fn run_launch(
+pub(crate) async fn run_launch(
     ctx: &mut AppContext,
     launcher_id: &str,
     args: &[String],
@@ -1334,5 +1377,29 @@ mod completions_tests {
     #[test]
     fn completions_command_rejects_unknown_shell() {
         assert!(Cli::try_parse_from(["granite-cli", "completions", "tcsh"]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod run_launch_tests {
+    use super::*;
+
+    use crate::utils::ui::base::tests::CaptureUi;
+
+    #[tokio::test]
+    async fn run_launch_unknown_launcher_returns_err() {
+        let _home = crate::config::TestConfigHome::new();
+        let mut ctx = AppContext::new(
+            crate::config::Config::default(),
+            Arc::new(CaptureUi::default()),
+        );
+
+        let result = run_launch(&mut ctx, "no-such-launcher", &[], true).await;
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Launch aborted"), "unexpected error: {msg}");
+        assert!(msg.contains("no-such-launcher"), "unexpected error: {msg}");
     }
 }
