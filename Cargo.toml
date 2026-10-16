@@ -16,7 +16,7 @@ serde_yaml = "0.9"
 serde_json = "1"
 anyhow = "1"
 paste = "1.0.15"
-dialoguer = "0.11"
+dialoguer = "0.12"
 dirs = "5"
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
