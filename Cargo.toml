@@ -34,7 +34,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 nvml-wrapper = "0.13.0"
 indicatif = "0.17"
 futures-util = "0.3"
-serde_valid = "2.0.3"
+serde_valid = "3.2.0"
 axum = "0.8"
 bytes = "1"
 flate2 = "1"
