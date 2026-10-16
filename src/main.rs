@@ -762,7 +762,7 @@ async fn main() {
                 log_json,
                 log_thread_id,
             );
-            run_interactive_tui(ctx)
+            run_interactive_tui(ctx, log_level.parse().unwrap(), &log_filters)
                 .await
                 .map_err(|e| eprintln!("Error: {e}"))
         }
@@ -858,7 +858,7 @@ async fn run_launcher_command(
     }
 }
 
-async fn run_launch(
+pub(crate) async fn run_launch(
     ctx: &mut AppContext,
     launcher_id: &str,
     args: &[String],
@@ -1377,5 +1377,29 @@ mod completions_tests {
     #[test]
     fn completions_command_rejects_unknown_shell() {
         assert!(Cli::try_parse_from(["granite-cli", "completions", "tcsh"]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod run_launch_tests {
+    use super::*;
+
+    use crate::utils::ui::base::tests::CaptureUi;
+
+    #[tokio::test]
+    async fn run_launch_unknown_launcher_returns_err() {
+        let _home = crate::config::TestConfigHome::new();
+        let mut ctx = AppContext::new(
+            crate::config::Config::default(),
+            Arc::new(CaptureUi::default()),
+        );
+
+        let result = run_launch(&mut ctx, "no-such-launcher", &[], true).await;
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Launch aborted"), "unexpected error: {msg}");
+        assert!(msg.contains("no-such-launcher"), "unexpected error: {msg}");
     }
 }

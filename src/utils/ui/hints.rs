@@ -43,6 +43,8 @@ pub(crate) enum Hint {
     ConfiguredLegend,
     /// `[Enter/Esc] Close` — dismiss a finished setup pane.
     Close,
+    /// `[l] Launch` — launch a configured launcher instance.
+    Launch,
 }
 
 impl std::fmt::Display for Hint {
@@ -69,6 +71,7 @@ impl std::fmt::Display for Hint {
             Hint::Quit => write!(f, "[q] Quit"),
             Hint::ConfiguredLegend => write!(f, "✓ = configured"),
             Hint::Close => write!(f, "[Enter/Esc] Close"),
+            Hint::Launch => write!(f, "[l] Launch"),
         }
     }
 }
@@ -161,6 +164,11 @@ mod tests {
     #[test]
     fn close_display() {
         assert_eq!(Hint::Close.to_string(), "[Enter/Esc] Close");
+    }
+
+    #[test]
+    fn launch_display() {
+        assert_eq!(Hint::Launch.to_string(), "[l] Launch");
     }
 
     #[test]
