@@ -2592,7 +2592,7 @@ impl App {
             ]),
         ];
 
-        let para = Paragraph::new(lines).wrap(Wrap { trim: true }).block(
+        let para = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
             Block::default()
                 .borders(Borders::ALL)
                 .title(format!(" {} ", Self::CONFIRM_LAUNCH_TITLE)),
@@ -5581,6 +5581,54 @@ mod tests {
                  last word: {last_word:?}; screen: {screen:?}"
             );
         }
+    }
+
+    #[test]
+    fn launch_confirm_buttons_keep_their_columns_when_toggled() {
+        let mut a = launcher_app();
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+
+        // Column of the first cell of `word` in row `y` at or after column
+        // `from`, or None.
+        let find_in_row = |term: &ratatui::Terminal<ratatui::backend::TestBackend>,
+                           word: &str,
+                           y: u16,
+                           from: u16|
+         -> Option<u16> {
+            let buffer = term.backend().buffer();
+            let letters: Vec<String> = word.chars().map(String::from).collect();
+            (from..buffer.area.width.saturating_sub(letters.len() as u16)).find(|&x| {
+                letters
+                    .iter()
+                    .enumerate()
+                    .all(|(i, l)| buffer[(x + i as u16, y)].symbol() == l)
+            })
+        };
+
+        // (row, Yes column, No column) of the button row: the row where
+        // "Yes" is followed by "No".
+        let mut positions = vec![];
+        for yes in [true, false] {
+            a.mode = AppMode::LaunchConfirm {
+                instance_id: "my-bob".to_string(),
+                yes,
+            };
+            terminal.draw(|f| a.render(f)).unwrap();
+            let height = terminal.backend().buffer().area.height;
+            let buttons = (0..height)
+                .find_map(|y| {
+                    let yes_x = find_in_row(&terminal, "Yes", y, 0)?;
+                    let no_x = find_in_row(&terminal, "No", y, yes_x + 3)?;
+                    Some((y, yes_x, no_x))
+                })
+                .expect("Yes/No button row missing");
+            positions.push(buttons);
+        }
+        assert_eq!(
+            positions[0], positions[1],
+            "Yes/No buttons moved when the selection changed: {positions:?}"
+        );
     }
 
     #[test]
