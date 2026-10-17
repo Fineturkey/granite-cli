@@ -24,6 +24,15 @@ if ! command -v jq &> /dev/null; then
     fi
 fi
 
+# Total size in GB of all .safetensors files in a repo (HF uses GB, not GiB).
+# Prints 0 if the tree can't be read.
+safetensors_tree_size_gb() {
+    local repo="$1"
+    $SCRIPT_DIR/utils/hf-curl.sh "${HF_API}/models/${repo}/tree/main" 2>/dev/null | \
+        jq -r '([.[]? | select(.type == "file" and (.path | endswith(".safetensors"))) | .size // 0] | add // 0) / 1000000000 * 1000 | round / 1000' \
+        2>/dev/null || echo "0"
+}
+
 find_mlx_variants() {
     local base_repo="$1"
     local bytes_to_gb="$((1000**3))"
@@ -92,19 +101,13 @@ find_mlx_variants() {
             continue
         fi
 
-        # `.safetensors.total` is a *parameter count*, not a byte size (and
-        # for packed low-bit quantizations, each packed dtype's count is the
-        # number of packed container elements, not unpacked parameters) - so
-        # size has to be computed from each dtype's element count and width.
-        size_gb=$(echo "$detail" | jq -r --argjson bytes_to_gb "$bytes_to_gb" '
-            def dtype_bytes:
-                if test("^(F|BF)16$") then 2
-                elif test("^(F|I|U)32$") then 4
-                elif test("^(F|I|U)64$") then 8
-                elif test("^(I|U)8$") then 1
-                else 4 end;
-            ((.safetensors.parameters // {}) | to_entries | map(.value * (.key | dtype_bytes)) | add // 0) / $bytes_to_gb * 1000 | round / 1000
-        ' 2>/dev/null || echo "0")
+        # Sum the actual .safetensors file sizes from the repo tree. We can't
+        # derive this from `.safetensors.parameters`: for packed low-bit
+        # quantizations HF reports the *unpacked* parameter count under the
+        # packed container dtype (e.g. U32), so multiplying by dtype width
+        # overstates the size several-fold. `.safetensors.total` is likewise a
+        # parameter count, not bytes.
+        size_gb=$(safetensors_tree_size_gb "$repo_id")
 
         jq -n \
             --arg precision "$precision" \
@@ -119,7 +122,7 @@ find_variants() {
     local base_repo=$(echo "$model_info" | jq -r .repo)
     local base_name=$(basename "$base_repo")
     local bytes_to_gb="$((1000**3))" # HF uses GB, not GiB
-    local safetensors_dtype=$(echo "$model_info" | jq -r .config.torch_dtype || echo "bfloat16") # Assume BF16 by default
+    local safetensors_dtype=$(echo "$model_info" | jq -r '.config.torch_dtype // .config.dtype // "bfloat16"') # Assume BF16 by default
     multiplier=1
     if [[ "$safetensors_dtype" == *"16"* ]]; then
         multiplier="2"
@@ -130,7 +133,14 @@ find_variants() {
     elif [[ "$safetensors_dtype" == *"4"* ]]; then
         multiplier="0.5"
     fi
-    local safetensors_size_gb=$(echo "$model_info" | jq -r "((.size // 0) / $bytes_to_gb * $multiplier * 1000 | round/1000)")
+    # Prefer the real on-disk size; fall back to an estimate from the
+    # parameter count if the tree can't be read. (Models like Granite Switch
+    # carry extra non-BF16 tensors that the estimate misses.)
+    local safetensors_size_gb
+    safetensors_size_gb=$(safetensors_tree_size_gb "$base_repo")
+    if [ "$safetensors_size_gb" = "0" ]; then
+        safetensors_size_gb=$(echo "$model_info" | jq -r "((.size // 0) / $bytes_to_gb * $multiplier * 1000 | round/1000)")
+    fi
 
     # Look for GGUF repo
     local gguf_repo="${base_repo}-GGUF"
