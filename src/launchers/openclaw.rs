@@ -250,14 +250,14 @@ fn generate_config(
 
         // Add custom headers from binding if present. Omit entirely when
         // custom_headers is empty to match the behavior of other launchers.
-        if let Some(headers) = &binding.custom_headers {
-            if !headers.is_empty() {
-                let header_map: serde_json::Map<String, serde_json::Value> = headers
-                    .iter()
-                    .map(|(k, v)| (k.clone(), serde_json::Value::String(v.0.clone())))
-                    .collect();
-                provider_entry["headers"] = serde_json::Value::Object(header_map);
-            }
+        if let Some(headers) = &binding.custom_headers
+            && !headers.is_empty()
+        {
+            let header_map: serde_json::Map<String, serde_json::Value> = headers
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.0.clone())))
+                .collect();
+            provider_entry["headers"] = serde_json::Value::Object(header_map);
         }
 
         let mut providers = serde_json::Map::new();

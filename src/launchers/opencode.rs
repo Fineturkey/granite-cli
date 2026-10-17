@@ -603,28 +603,28 @@ impl OpenCodeLauncher {
                 result.push(c);
                 continue;
             }
-            if c == '/' {
-                if let Some(&next) = chars.peek() {
-                    if next == '/' {
-                        // Line comment: skip to end of line
-                        while let Some(&ch) = chars.peek() {
-                            if ch == '\n' {
-                                break;
-                            }
-                            chars.next();
+            if c == '/'
+                && let Some(&next) = chars.peek()
+            {
+                if next == '/' {
+                    // Line comment: skip to end of line
+                    while let Some(&ch) = chars.peek() {
+                        if ch == '\n' {
+                            break;
                         }
-                        continue;
-                    } else if next == '*' {
-                        // Block comment: skip to */
-                        chars.next(); // consume '*'
-                        while let Some(ch) = chars.next() {
-                            if ch == '*' && chars.peek() == Some(&'/') {
-                                chars.next();
-                                break;
-                            }
-                        }
-                        continue;
+                        chars.next();
                     }
+                    continue;
+                } else if next == '*' {
+                    // Block comment: skip to */
+                    chars.next(); // consume '*'
+                    while let Some(ch) = chars.next() {
+                        if ch == '*' && chars.peek() == Some(&'/') {
+                            chars.next();
+                            break;
+                        }
+                    }
+                    continue;
                 }
             }
             result.push(c);
