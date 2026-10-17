@@ -24,6 +24,10 @@ pub enum ModelFunction {
     /// Detect harms
     Guardian,
 
+    /*-- Decision Functions --*/
+    /// Decision making / classification
+    Decision,
+
     /*-- Embedding Functions --*/
     /// Vector representation generation for text
     Embeddings,
@@ -47,6 +51,7 @@ impl std::fmt::Display for ModelFunction {
             ModelFunction::Thinking => write!(f, "Thinking"),
             ModelFunction::ImageUnderstanding => write!(f, "Image Understanding"),
             ModelFunction::Guardian => write!(f, "Guardian"),
+            ModelFunction::Decision => write!(f, "Decision"),
             ModelFunction::Embeddings => write!(f, "Embeddings"),
             ModelFunction::Transcription => write!(f, "Transcription"),
             ModelFunction::Translation => write!(f, "Translation"),
