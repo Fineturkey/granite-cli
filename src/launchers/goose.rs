@@ -187,31 +187,31 @@ impl Launcher for GooseLauncher {
 
             // Add custom headers as OPENAI_CUSTOM_HEADERS env var if configured.
             // Format: HEADER_A=VALUE_A,HEADER_B=VALUE_B, sorted by key for deterministic output.
-            if let Some(ref headers) = binding.custom_headers {
-                if !headers.is_empty() {
-                    let mut header_pairs: Vec<(String, String)> = headers
-                        .iter()
-                        .map(|(k, v)| {
-                            (
-                                k.clone(),
-                                serde_json::to_value(v)
-                                    .unwrap()
-                                    .as_str()
-                                    .unwrap()
-                                    .to_string(),
-                            )
-                        })
-                        .collect();
-                    header_pairs.sort_by(|a, b| a.0.cmp(&b.0));
-                    let header_lines: Vec<String> = header_pairs
-                        .iter()
-                        .map(|(k, v)| format!("{k}={v}"))
-                        .collect();
-                    overlay.push(EnvBinding {
-                        key: "OPENAI_CUSTOM_HEADERS".to_string(),
-                        value: header_lines.join(","),
-                    });
-                }
+            if let Some(ref headers) = binding.custom_headers
+                && !headers.is_empty()
+            {
+                let mut header_pairs: Vec<(String, String)> = headers
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            k.clone(),
+                            serde_json::to_value(v)
+                                .unwrap()
+                                .as_str()
+                                .unwrap()
+                                .to_string(),
+                        )
+                    })
+                    .collect();
+                header_pairs.sort_by(|a, b| a.0.cmp(&b.0));
+                let header_lines: Vec<String> = header_pairs
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect();
+                overlay.push(EnvBinding {
+                    key: "OPENAI_CUSTOM_HEADERS".to_string(),
+                    value: header_lines.join(","),
+                });
             }
         }
         alog_channel!(MessageLevel::Debug4, "Env Overlay: {:#?}", overlay);
