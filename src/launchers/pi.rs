@@ -520,6 +520,7 @@ fn pi_api_name(api_type: &ApiType) -> anyhow::Result<&'static str> {
         ApiType::Ollama => anyhow::bail!(
             "Pi has no Ollama-native API client; bind an OpenAI-compatible endpoint instead"
         ),
+        ApiType::Jev => anyhow::bail!("Pi has no Jev-native API client"),
     }
 }
 
@@ -531,7 +532,7 @@ fn pi_base_url(binding: &AgentModelBinding) -> String {
     let prefix = match binding.api_type {
         ApiType::OpenAI => binding.endpoint_path.strip_suffix("/chat/completions"),
         ApiType::Anthropic => binding.endpoint_path.strip_suffix("/messages"),
-        ApiType::Ollama => None,
+        ApiType::Ollama | ApiType::Jev => None,
     }
     .unwrap_or("");
     format!("{root}{prefix}")

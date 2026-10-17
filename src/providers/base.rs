@@ -17,6 +17,8 @@ pub enum ApiType {
     Ollama,
     /// Anthropic API protocol
     Anthropic,
+    /// Jev Decision API
+    Jev,
 }
 
 impl std::fmt::Display for ApiType {
@@ -25,6 +27,7 @@ impl std::fmt::Display for ApiType {
             ApiType::OpenAI => write!(f, "OpenAI"),
             ApiType::Ollama => write!(f, "Ollama"),
             ApiType::Anthropic => write!(f, "Anthropic"),
+            ApiType::Jev => write!(f, "Jev"),
         }
     }
 }
@@ -46,6 +49,8 @@ pub enum ApiEndpoint {
     OllamaEmbeddings,
     /// /v1/messages
     AnthropicMessages,
+    /// /v1/systemone
+    JevSystemOne,
 }
 
 impl ApiEndpoint {
@@ -59,6 +64,7 @@ impl ApiEndpoint {
             ApiEndpoint::OllamaChat | ApiEndpoint::OllamaEmbeddings => ApiType::Ollama,
 
             ApiEndpoint::AnthropicMessages => ApiType::Anthropic,
+            ApiEndpoint::JevSystemOne => ApiType::Jev,
         }
     }
 
@@ -71,6 +77,7 @@ impl ApiEndpoint {
             ApiEndpoint::OllamaChat => "/api/chat",
             ApiEndpoint::OllamaEmbeddings => "/api/embeddings",
             ApiEndpoint::AnthropicMessages => "/v1/messages",
+            ApiEndpoint::JevSystemOne => "/v1/systemone",
         }
     }
 
@@ -97,6 +104,8 @@ impl ApiEndpoint {
                 ModelFunction::SpeakerAttribution,
                 ModelFunction::KeywordBiasing,
             ],
+
+            ApiEndpoint::JevSystemOne => vec![ModelFunction::Decision],
         }
     }
 }
