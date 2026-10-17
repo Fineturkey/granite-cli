@@ -285,8 +285,16 @@ fetch_model_metadata() {
 echo "["
 first=true
 
-# Process each collection
-jq -c '.[]' "$COLLECTIONS_FILE" | while read -r collection; do
+# Repos already emitted. A repo can belong to multiple collections (e.g.
+# granite-switch-4.1-30b is in both "Granite Switch" and "Granite Speech"),
+# but must only appear once, under a single family. (Newline-delimited string
+# rather than an associative array to stay compatible with macOS bash 3.2.)
+seen_repos=$'\n'
+
+# Process each collection. "Granite Switch" is sorted first (sort_by is
+# stable) so that Switch models, which can also be listed in more specific
+# collections like Speech, are always attributed to the Switch family.
+jq -c 'sort_by(.name != "Granite Switch") | .[]' "$COLLECTIONS_FILE" | while read -r collection; do
     name=$(echo "$collection" | jq -r '.name')
     slug=$(echo "$collection" | jq -r '.slug')
     category=$(echo "$collection" | jq -r '.category')
@@ -324,6 +332,10 @@ jq -c '.[]' "$COLLECTIONS_FILE" | while read -r collection; do
             echo "  Skipping lora adapter: $repo" >&2
             continue
         fi
+        if [[ "$seen_repos" == *$'\n'"$repo"$'\n'* ]]; then
+            echo "  Skipping duplicate (already in an earlier collection): $repo" >&2
+            continue
+        fi
         if is_derived_model "$repo"; then
             echo "  Skipping derived (quantized) model: $repo" >&2
             continue
@@ -333,6 +345,7 @@ jq -c '.[]' "$COLLECTIONS_FILE" | while read -r collection; do
             continue
         fi
 
+        seen_repos+="${repo}"$'\n'
         echo "  Fetching: $repo" >&2
 
         if [ "$first" = true ]; then

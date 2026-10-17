@@ -101,7 +101,7 @@ def parse_variant(s):
 
 # Valid model functions for validation
 VALID_FUNCTIONS = {
-    "Chat", "ToolCalling", "Thinking", "ImageUnderstanding", "Guardian",
+    "Chat", "ToolCalling", "Thinking", "ImageUnderstanding", "Guardian", "Decision",
     "Embeddings", "Transcription", "Translation", "SpeakerAttribution", "KeywordBiasing"
 }
 
