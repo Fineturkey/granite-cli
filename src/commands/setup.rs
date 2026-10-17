@@ -3340,13 +3340,14 @@ mod tests {
 
     #[tokio::test]
     async fn select_variants_auto_selects_when_only_one_candidate_without_prompting() {
+        const MODEL_ID: &str = "granite-guardian-hap-38m";
         let capture = Arc::new(CaptureUi::default());
         let mut ctx = crate::AppContext::new(Config::default(), capture.clone());
 
-        // granite-docling-258M-mlx has exactly one (safetensors) variant;
+        // granite-guardian-hap-38m has exactly one (safetensors) variant;
         // openai-compatible's default `can_run_model` accepts any format.
         let md = MODEL_REGISTRY
-            .get("granite-docling-258M-mlx")
+            .get(MODEL_ID)
             .expect("fixture model should exist in the catalog");
         assert_eq!(
             md.variants.len(),
@@ -3355,20 +3356,14 @@ mod tests {
         );
 
         let discovery = DiscoveryResult {
-            recommendations: vec![model_recommendation(
-                "granite-docling-258M-mlx",
-                &md,
-                md.variants[0].clone(),
-            )],
+            recommendations: vec![model_recommendation(MODEL_ID, &md, md.variants[0].clone())],
             all_model_candidates: vec![],
             configured_provider_ids: vec![],
             configured_model_ids: vec![],
             configured_launcher_ids: vec![],
             configured_capability_ids: vec![],
         };
-        let selected_models: HashSet<String> = ["granite-docling-258M-mlx".to_string()]
-            .into_iter()
-            .collect();
+        let selected_models: HashSet<String> = [MODEL_ID.to_string()].into_iter().collect();
         let selected_providers: HashSet<String> =
             ["openai-compatible".to_string()].into_iter().collect();
 
@@ -3382,7 +3377,7 @@ mod tests {
         .unwrap();
 
         let picked = chosen
-            .get("granite-docling-258M-mlx")
+            .get(MODEL_ID)
             .expect("should have auto-selected the sole candidate");
         assert_eq!(picked.format, md.variants[0].format);
         assert_eq!(picked.precision, md.variants[0].precision);
