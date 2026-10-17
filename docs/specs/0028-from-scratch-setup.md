@@ -88,7 +88,8 @@ This causes five problems.
 - **`provider setup` cannot tell "not installed" from "not running".** It
   saves the provider, runs the health check, and on failure prints "It may
   need to be started or configured differently." The user has to work out
-  whether to install the server, start it, or correct the endpoint.
+  whether to install the server, start it, or correct the endpoint, and is
+  not told how to do any of these.
 - **granite-cli holds no install knowledge.** The metadata of provider and
   launcher types has no install information, and spec 0023 lists provider
   installation as a non-goal. Each user looks up the install page of every
@@ -105,6 +106,9 @@ These terms are used throughout:
   declares in its metadata. A local provider is a server the user runs; a
   hosted provider is a service on the internet. `openai-compatible` is
   declared hosted although its default endpoint is on localhost.
+- **Terminal session**: a run of granite-cli with the terminal or plain
+  output format, attached to a terminal, outside the TUI and outside
+  `setup --auto`.
 
 ## Use Cases
 
@@ -114,14 +118,16 @@ Starting from nothing:
 
 1. **Install during the wizard.** On a machine with no agent tool and no
    model server, `granite-cli setup` lists the tools it can install here,
-   with the command for each, and installs the ones the user ticks. The
-   wizard then continues with them as if they had been found.
+   with the command for each, and installs the ones the user ticks. It shows
+   how to start each model server it installed, and checks again when the
+   user says the server is running. The wizard then continues with what it
+   found.
 2. **Learn what is missing in auto mode.** `granite-cli setup --auto` on the
    same machine installs nothing, and says that no launcher and no provider
    were found, with the commands that would fix it.
 3. **Install in auto mode, by name.** `granite-cli setup --auto --install
-   ollama --install opencode` installs those two tools, starts Ollama, and
-   configures both without asking.
+   ollama --install opencode` installs those two tools without asking,
+   configures OpenCode, and says how to start Ollama.
 
 One tool at a time:
 
@@ -130,26 +136,29 @@ One tool at a time:
    continues with the binary it installed.
 5. **Set up a provider that is not installed.** `granite-cli provider setup
    ollama` offers to install Ollama when nothing answers at its endpoint and
-   the program is missing, then offers to start it.
-6. **Start a provider that is installed but not running.** `provider setup`
-   offers to start the server, or shows the command to start it and checks
-   again when the user is ready.
+   the program is missing. After the install it shows how to start the
+   server and checks again when the user is ready.
+6. **Learn how to start a provider that is installed but not running.**
+   `provider setup` says where it found the program, shows the command that
+   runs the server, and checks again when the user is ready.
 7. **Read the instructions without running anything.** `granite-cli launcher
    info goose` and `granite-cli provider info lm-studio` show how to install
    the type on this machine.
 
-When granite-cli cannot install a tool:
+When granite-cli cannot run the install:
 
-8. **A GUI or administrator install.** For LM Studio, and for any method
-   that needs a password, granite-cli shows the instructions and the page to
-   download from, and runs nothing.
-9. **No suitable package manager.** When no method can run here, for example
-   on a Mac without Homebrew, granite-cli says which program each method needs
-   and shows the manual instructions.
+8. **A GUI install.** For LM Studio, granite-cli shows the page to download
+   it from and how to start its server, and runs nothing.
+9. **An installer that asks for a password.** In a terminal session the
+   installer runs in the user's terminal and asks there. In the TUI and in
+   `setup --auto`, granite-cli shows the command for the user to run.
+10. **No suitable package manager.** When no method can run here, for example
+    on a Mac without Homebrew, granite-cli says which program each method
+    needs and shows the manual instructions.
 
 In the TUI:
 
-10. **Install from the setup pane.** Setting up a provider or launcher from
+11. **Install from the setup pane.** Setting up a provider or launcher from
     the TUI makes the same offer, shows the installer's output in the pane,
     and stops the installer on `Esc`.
 
@@ -158,12 +167,13 @@ In the TUI:
 Each provider type and launcher type carries **install instructions** in its
 registry metadata: a list of **install methods**, each one a command for one
 operating system and one package manager, and a page to read when no method
-applies. When setup, `provider setup` or `launcher setup` finds a type
-missing, granite-cli picks the methods that can run on this machine, shows the
-exact command, and runs it only after the user chooses it. Once the command
-finishes, granite-cli detects the type again and, for a provider, starts it or
-says how to. Setup then continues as if the type had been there from the
-start.
+applies. A local provider type also says how its server is started. When
+setup, `provider setup` or `launcher setup` finds a type missing, granite-cli
+picks the methods that can run on this machine, shows the exact command, and
+runs it only after the user chooses it. Once the command finishes, granite-cli
+detects the type again. A provider server is never started by granite-cli:
+it shows how to start it and checks again when asked. Setup then continues as
+if the type had been there from the start.
 
 ```mermaid
 flowchart TD
@@ -171,10 +181,10 @@ flowchart TD
   disc --> found{"launcher and provider<br/>detected?"}
   found -- "yes" --> wiz["wizard phases, as today"]
   found -- "none of a kind" --> offer["install step<br/>methods that run here,<br/>with their commands"]
-  offer -- "user ticks tools<br/>and confirms" --> run["run install commands<br/>output shown line by line"]
+  offer -- "user ticks tools<br/>and confirms" --> run["run install commands"]
   offer -- "nothing ticked" --> wiz
-  run --> start2["start providers<br/>or show how"]
-  start2 --> redisc["Discovery again"]
+  run --> howto["show how to start<br/>each provider installed"]
+  howto -- "Check again" --> redisc["Discovery again"]
   redisc --> wiz
   wiz --> sum["Setup Complete<br/>names the command for anything still missing"]
 ```
@@ -190,7 +200,16 @@ In order of how much of the design depends on them.
    software changes the machine outside granite-cli's own configuration, and
    a user may have reasons to install a tool another way.
 
-2. **Install instructions are part of each type's registry metadata, compiled
+2. **granite-cli never starts, stops or registers a provider server.** After
+   an install, and whenever a local provider does not answer, it shows the
+   command that runs the server and the platform's usual way to keep it
+   running, such as `brew services start ollama`, as text. How a server
+   should run differs by provider and by platform: a service under
+   `brew services` or `systemd`, a foreground process, or a desktop app.
+   Several providers, such as `llama-server` outside router mode, are not
+   daemons at all.
+
+3. **Install instructions are part of each type's registry metadata, compiled
    into the binary.** No configuration file can add a method or change a
    command. Install instructions are needed before any instance of the type
    exists and are the same for every instance, and the metadata already
@@ -198,45 +217,39 @@ In order of how much of the design depends on them.
    users share, so a command read from user files could be a command someone
    else wrote.
 
-3. **A method runs only when it can finish without input.** A method that
-   needs administrator rights, a password, a GUI installer, or an answer to a
-   question is marked attended and is shown as instructions. The installer
-   runs with no terminal input, so it cannot ask anything; the TUI owns the
-   terminal, and a password prompt during an install is a privilege decision
-   the user should make in their own shell.
+4. **In a terminal session the installer runs in the user's terminal; in the
+   TUI and in `setup --auto` it runs with no input.** Vendor scripts run as
+   `curl … | sh`, and `sudo`, read their answers from the terminal, so in a
+   terminal session they can ask questions and ask for a password. The TUI
+   owns the terminal, and `setup --auto` has nobody to answer, so there the
+   installer gets no input and its output is captured. A method that needs
+   input, such as one that calls `sudo`, is marked attended, and is offered
+   only in a terminal session; elsewhere it is shown as instructions.
 
-4. **For a provider, the health check decides whether it is available, and
-   the program decides what to offer.** Each local provider type names the
-   program its install puts on PATH. When the health check fails at a
-   localhost endpoint, a missing program leads to the install offer, and a
-   present program leads to the start offer. A failure at any other endpoint
-   leads to neither, because the server is on another machine.
+5. **For a local provider, a failed health check always says that the server
+   may not be running, and the program on PATH decides whether to offer an
+   install.** Each local provider type names the program its install puts on
+   PATH. When the health check fails at a localhost endpoint and the program
+   is missing, granite-cli offers the install, and says that the server may
+   be installed elsewhere and not running. When the program is present, it
+   shows how to start the server. A failure at any other endpoint leads to
+   neither, because the server is on another machine. Open Question 1 asks
+   whether to offer the install even when the program is present.
 
-5. **The wizard offers installs once, right after discovery, and then runs
+6. **The wizard offers installs once, right after discovery, and then runs
    discovery again.** The wizard picks capabilities and models using the
    healthy providers that discovery found. A provider installed during the
    Providers phase would arrive after those choices were made.
 
-6. **A method applies when its operating system matches and the program it
+7. **A method applies when its operating system matches and the program it
    uses is on PATH.** The program is the package manager or downloader:
    `brew`, `winget`, `npm`, `uv`, `curl`. Methods are listed in the order the
    type declares, and the first one that applies is the default.
 
-7. **granite-cli starts a provider only with a command that returns.** A
-   method may name a start command that hands the server to the operating
-   system's service manager, such as `brew services start ollama`. Without
-   one, granite-cli shows the command that runs the server and waits for the
-   user to start it. A server started as a child of granite-cli would stop,
-   or lose its output, when granite-cli exits.
-
-8. **Installer output is captured and passed to the UI one line at a time.**
-   The same code then serves the terminal and the TUI setup pane, where a
-   subprocess writing to the terminal would corrupt the screen.
-
-9. **Under WSL, granite-cli shows instructions only.** `install.sh` installs
+8. **Under WSL, granite-cli shows instructions only.** `install.sh` installs
    the Windows build of granite-cli under WSL. A tool installed on the Linux
    side may not be found by that build, and one installed on the Windows side
-   may not be what the user wants. Open Question 2 covers lifting this.
+   may not be what the user wants. Open Question 3 covers lifting this.
 
 ### What install instructions contain
 
@@ -249,10 +262,13 @@ there is nothing granite-cli can run. They hold:
   `lms`.
 - **Page**: the vendor's install page, shown with manual instructions.
 - **Note**: a sentence shown with the manual instructions, for steps that are
-  not a command, such as "start the server from the Developer tab".
+  not a command, such as "Open LM Studio and start the server from the
+  Developer tab".
 - **Run command**: for a local provider, the command that runs the server in
-  the foreground, such as `ollama serve`, shown when granite-cli does not
-  start it.
+  the foreground, such as `ollama serve`.
+- **Start notes**: for a local provider, zero or more lines, each for one
+  operating system, naming the usual way to keep the server running there,
+  such as "Homebrew can run it as a service: `brew services start ollama`".
 - **Methods**: zero or more install methods.
 
 An install method holds:
@@ -261,23 +277,23 @@ An install method holds:
 - its kind and the program it needs: Homebrew (`brew`), winget, npm, uv, or a
   vendor script (`curl` and `sh`, or PowerShell on Windows);
 - the command line, run through the shell, so what is shown is what runs;
-- whether it is attended (decision 3);
+- whether it is attended (decision 4);
 - directories the method installs into that may not be on PATH yet, such as
-  a vendor script's `~/.local/bin`;
-- for a provider, an optional start command (decision 7).
+  a vendor script's `~/.local/bin`.
 
-The methods below show the shape. They are illustrative: each command must be
-checked against the vendor's current instructions when the sub-task that adds
-it is written.
+The methods below show the shape. Each command is checked against the
+vendor's current instructions in the sub-task that adds it, and the source is
+named next to it in the code.
 
 ```
   type        os       kind     command                                              notes
   ────        ──       ────     ───────                                              ─────
-  ollama      macOS    brew     brew install ollama                                  start: brew services start ollama
+  ollama      macOS    brew     brew install ollama                                  start note: brew services start ollama
   ollama      Linux    script   curl -fsSL https://ollama.com/install.sh | sh        attended: asks for sudo
   ollama      Windows  winget   winget install --id Ollama.Ollama -e
-  llama-cpp   macOS,   brew     brew install llama.cpp                               run: llama-server (router mode)
+  llama-cpp   macOS,   brew     brew install llama.cpp                               run: llama-server
               Linux
+  llama-cpp   Windows  winget   winget install llama.cpp
   lm-studio   any      —        none: desktop app                                    page: https://lmstudio.ai
   openai-     any      —        none: point the provider at your server
   compatible
@@ -305,8 +321,9 @@ one or the other.
 granite-cli builds a picture of the machine when it first needs to install
 something: the operating system it was built for, whether it is running under
 WSL, and which of the programs the methods need are on PATH. A method applies
-when its operating system matches and its program is found. Each method that
-does not apply is listed with the reason:
+when its operating system matches, its program is found, and, for an attended
+method, the session is a terminal session. Each method that does not apply is
+listed with the reason:
 
 ```
 $ granite-cli launcher info goose
@@ -321,21 +338,22 @@ Launcher: goose
 `provider info` and `launcher info` show this for a catalog type, so the
 instructions can be read without running anything.
 
-When no method applies, or every method that applies is attended, granite-cli
-shows the manual instructions: every method for this operating system, with
-what each needs, then the page and the note.
+When no method applies, granite-cli shows the manual instructions: every
+method for this operating system, with what each needs, then the page and the
+note.
 
 ```
-LM Studio is a desktop app and cannot be installed from granite-cli.
-  1. Download it from https://lmstudio.ai and open it.
-  2. Start the server from the Developer tab.
+LM Studio cannot be installed from granite-cli.
+  Download it from https://lmstudio.ai
+  Open LM Studio and start the server from the Developer tab.
 Then run `granite-cli provider setup lm-studio` again.
 ```
 
 ### Asking and running
 
 An offer lists the methods that apply, each as its full command, and a line
-that installs nothing. Choosing a command is the consent to run it.
+that installs nothing. Choosing a command is the consent to run it. An
+attended method is marked with what it will ask for.
 
 ```
 ⚠ 'opencode' not found on PATH.
@@ -346,8 +364,24 @@ that installs nothing. Choosing a command is the consent to run it.
 ```
 
 granite-cli runs the chosen command through the shell (`sh -c` on macOS and
-Linux, PowerShell on Windows) with no input attached. It prints each line of
-output as it arrives, indented under the command:
+Linux, PowerShell on Windows). There is no time limit; installs can take
+minutes.
+
+**In a terminal session** the installer inherits the terminal. Its output,
+progress bars and questions appear as they would if the user ran the command
+themselves:
+
+```
+Running: curl -fsSL https://ollama.com/install.sh | sh
+>>> Installing ollama to /usr/local
+[sudo] password for me:
+>>> Install complete.
+✓ Installed: /usr/local/bin/ollama
+```
+
+**In the TUI and in `setup --auto`** the installer gets no input, and
+granite-cli prints each line of its output as it arrives, indented under the
+command:
 
 ```
 Running: npm install -g opencode-ai
@@ -355,12 +389,10 @@ Running: npm install -g opencode-ai
 ✓ Installed: /opt/homebrew/bin/opencode
 ```
 
-There is no time limit; installs can take minutes.
-
-**Failure.** A non-zero exit status is reported with the last 20 lines of
-output, and followed by the manual instructions. Nothing is saved, and the
-command that offered the install carries on as it does today when the type is
-missing.
+**Failure.** A non-zero exit status is reported, followed by the manual
+instructions. When the output was captured, the last 20 lines are repeated
+with the report. Nothing is saved, and the command that offered the install
+carries on as it does today when the type is missing.
 
 ```
 Running: npm install -g opencode-ai
@@ -399,31 +431,20 @@ when it finds it there it sets the launcher's `command_path` to it:
 
 When the binary is found nowhere, granite-cli reports the install as failed.
 
-**A provider** is installed but usually not running. When the method has a
-start command, granite-cli offers it:
+**A provider** is installed but usually not running. granite-cli shows how to
+start it, then asks whether to check again:
 
 ```
 ✓ Installed: /opt/homebrew/bin/ollama
-? Start Ollama now?
-  › brew services start ollama
-    I'll start it myself
-Running: brew services start ollama
-  │ ==> Successfully started `ollama` (label: homebrew.mxcl.ollama)
-Waiting for http://localhost:11434 … healthy after 0.6s
-```
-
-granite-cli runs the health check every second for up to 10 seconds. When
-there is no start command, or the user starts the server, granite-cli shows
-the run command and waits for the user:
-
-```
-Start Ollama in another terminal:
+granite-cli does not start Ollama. Start it in another terminal:
     ollama serve
+  Homebrew can also run it as a service: brew services start ollama
 ? Ollama is not answering at http://localhost:11434.
   › Check again
     Continue without it
 ```
 
+"Check again" runs the health check once more and asks again while it fails.
 "Continue without it" leaves the provider configured but not healthy, which
 is what `provider setup` does today when the health check fails.
 
@@ -450,38 +471,43 @@ command_path:
     curl -fsSL https://opencode.ai/install | bash
     Don't install (show manual instructions)
 Running: npm install -g opencode-ai
-  │ added 1 package in 4s
+added 1 package in 4s
 ✓ Installed: /opt/homebrew/bin/opencode
 ? Select capabilities to enable [SPACE]
   ...
 Launcher 'opencode' configured successfully!
 ```
 
-**`provider setup <type>`** offers the install or the start after the health
-check fails, following decision 4. A hosted type gets its note, with no
-offer.
+**`provider setup <type>`** acts after the health check fails, following
+decision 5. A hosted type gets its note, with no offer. The provider is saved
+before the health check, as today.
+
+When the program is not on PATH:
 
 ```
 $ granite-cli provider setup ollama
 ...
 Running health check...
 ⚠ Provider 'ollama' health check failed: Connection failed.
-  'ollama' is not installed on this machine.
+  'ollama' was not found on PATH. If Ollama is installed elsewhere, it may
+  simply not be running.
 ? Install Ollama now?
   › brew install ollama
-    Don't install (show manual instructions)
+    Don't install
 Running: brew install ollama
-  │ ==> Fetching ollama
-  │ ==> Pouring ollama--…arm64_sequoia.bottle.tar.gz
+==> Fetching ollama
+==> Pouring ollama--…arm64_sequoia.bottle.tar.gz
 ✓ Installed: /opt/homebrew/bin/ollama
-? Start Ollama now?
-  › brew services start ollama
-    I'll start it myself
-Running: brew services start ollama
-  │ ==> Successfully started `ollama` (label: homebrew.mxcl.ollama)
-Waiting for http://localhost:11434 … healthy after 0.6s
+granite-cli does not start Ollama. Start it in another terminal:
+    ollama serve
+  Homebrew can also run it as a service: brew services start ollama
+? Ollama is not answering at http://localhost:11434.
+  › Check again
+    Continue without it
 Provider 'ollama' is healthy!
 ```
+
+When the program is on PATH:
 
 ```
 $ granite-cli provider setup ollama
@@ -489,12 +515,15 @@ $ granite-cli provider setup ollama
 Running health check...
 ⚠ Provider 'ollama' health check failed: Connection failed.
   'ollama' is installed (/usr/local/bin/ollama) but not answering at http://localhost:11434.
-Start Ollama in another terminal:
+granite-cli does not start Ollama. Start it in another terminal:
     ollama serve
 ? Ollama is not answering at http://localhost:11434.
   › Check again
     Continue without it
 ```
+
+"Don't install" goes to the same start instructions and "Check again"
+prompt, since the server may be installed somewhere granite-cli did not look.
 
 The wizard's "Configure a different launcher…" and "Configure a different
 provider…" entries call these two commands, so they gain the same offer. A
@@ -510,7 +539,8 @@ first, the same order as the wizard's phases.
 
 The step is a multi-select with nothing ticked, so pressing `Enter` installs
 nothing. Types with no method that runs here are listed underneath, with
-where to read more.
+where to read more. A local provider whose program is already on PATH is not
+offered for install; it is listed as installed and not running.
 
 ```
 === granite-cli Setup Wizard ===
@@ -529,7 +559,7 @@ No agent tools were found on this machine.
 No model server is running on this machine.
 ? Select model servers to install [SPACE]
   [ ] ollama     Ollama      brew install ollama
-  [ ] llama-cpp  llama.cpp   brew install llama.cpp
+  Installed but not running: llama-cpp (start it with `llama-server`).
   Not installable here: lm-studio (desktop app).
   Hosted providers can be added in the Providers step.
 ```
@@ -544,11 +574,13 @@ These commands will run:
 ? Run them now? (Y/n)
 ```
 
-The installs run one after the other, as described above, and each provider
-gets its start offer. A failure is reported and the rest go on. The wizard
-then runs discovery again and continues with its phases. Types installed in
-this run are ticked in the Launchers and Providers lists, as types configured
-through "Configure a different …" are today.
+The installs run one after the other, as described above. A failure is
+reported and the rest go on. When a provider was installed, or a provider was
+listed as installed and not running, the wizard shows how to start each one
+and asks "Check again" or "Continue without them". It then runs discovery
+again and continues with its phases. Types installed in this run are ticked
+in the Launchers and Providers lists, as types configured through
+"Configure a different …" are today.
 
 The summary names a command for each kind that is still empty:
 
@@ -584,12 +616,14 @@ Auto-detecting and configuring all available components...
 ```
 
 `--install <type>` may be repeated, and requires `--auto`. For each named
-type, setup runs the first method that applies, then that method's start
-command when it has one, before discovery. A provider with no start command is
-reported as installed but not running. A named type with no method that runs
-here is reported with its manual instructions. Setup continues after any of
-these, and exits with a non-zero status at the end if a named install failed,
-since a script that names a tool expects it to be there.
+type, setup runs the first method that applies, before discovery, with no
+input. An attended method does not apply here. A provider it installs is
+reported as installed and not running, with its run command, and is
+configured only if it already answers when discovery runs. A named type with
+no method that runs here is reported with its manual instructions. Setup
+continues after any of these, and exits with a non-zero status at the end if
+a named install failed or could not run, since a script that names a tool
+expects it to be there.
 
 ```
 $ granite-cli setup --auto --install ollama --install opencode
@@ -597,7 +631,8 @@ $ granite-cli setup --auto --install ollama --install opencode
 
 Installing ollama: brew install ollama
   │ ...
-✓ ollama installed; started with `brew services start ollama`; healthy
+✓ ollama installed: /opt/homebrew/bin/ollama
+  granite-cli does not start Ollama. Start it with `ollama serve`, then run setup again.
 Installing opencode: npm install -g opencode-ai
   │ added 1 package in 4s
 ✓ opencode installed: /opt/homebrew/bin/opencode
@@ -609,14 +644,15 @@ Auto-detecting and configuring all available components...
 ### In the TUI
 
 The TUI runs `provider setup` and `launcher setup` in its setup pane, so it
-makes the same offers. The installer's output goes into the pane's output
-log, and the footer shows that `Esc` stops it.
+makes the same offers, without attended methods. The installer's output goes
+into the pane's output log, and the footer shows that `Esc` stops it.
 
 ```
 ┌ providers — ollama ──────────────────────────────────────────────┐
 │ Running health check...                                          │
 │ ⚠ Provider 'ollama' health check failed: Connection failed.      │
-│   'ollama' is not installed on this machine.                     │
+│   'ollama' was not found on PATH. If Ollama is installed         │
+│   elsewhere, it may simply not be running.                       │
 │ Running: brew install ollama                                     │
 │   │ ==> Fetching ollama                                          │
 │   │ ==> Pouring ollama--…arm64_sequoia.bottle.tar.gz             │
@@ -642,10 +678,11 @@ classDiagram
   }
   class InstallInfo {
     <<new: built in>>
-    +program: provider types only
+    +program
     +page
     +note
     +run_command: provider types only
+    +start_notes: provider types only
     +methods
   }
   class InstallMethod {
@@ -655,7 +692,6 @@ classDiagram
     +command
     +attended
     +bin_dirs
-    +start_command: provider types only
   }
   class Platform {
     <<new: run time>>
@@ -666,8 +702,8 @@ classDiagram
   class InstallEnv {
     <<new: interface>>
     +find(program)
-    +run(command, ui)
-    +check_provider(type)
+    +run(command, mode, ui)
+    +check_provider(type, config)
   }
   class LauncherConfig {
     <<unchanged>>
@@ -686,27 +722,30 @@ next to the name and description it returns today. They are read from the
 registry without building an instance.
 
 Everything that touches the machine goes through one interface, the install
-environment: looking a program up on PATH, running a command and passing its
-output to the UI, and running a provider's health check after an install. The
-real environment does these things. Tests use a fake one that answers from a
-table and records the commands it was asked to run, so no test looks at PATH,
-runs a command or opens a connection. The platform picture is built from the
-environment, so a test can describe a Mac without Homebrew or a Linux machine
-with npm.
+environment: looking a program up on PATH, running a command, and running a
+provider's health check. A command runs in one of two modes: attached to the
+terminal, or captured with no input and each output line passed to the UI.
+The UI says which mode it supports. The real environment does these things.
+Tests use a fake one that answers from a table and records the commands it
+was asked to run, so no test looks at PATH, runs an install command or opens
+a connection. The platform picture is built from the environment, so a test
+can describe a Mac without Homebrew or a Linux machine with npm.
 
 ## Open Questions
 
-1. **Installers that ask for a password.** Ollama's Linux script calls `sudo`,
-   so decision 3 makes Ollama instructions-only on Linux. Should granite-cli
-   run such an installer when it is attached to a terminal and not in the
-   TUI, and let the installer ask for the password itself?
-2. **WSL.** Which side should a tool be installed on when granite-cli is the
+1. **Offering the install when the program is on PATH.** Decision 5 offers
+   the install only when the provider's program is missing, and otherwise
+   shows how to start the server. Should a failed health check always offer
+   the install, with the warning that the server may not be running?
+2. **`setup --auto --install` with an attended method.** Ollama's Linux
+   script calls `sudo`, so `setup --auto --install ollama` reports it as
+   manual on Linux. Should `--install` run attended methods when standard
+   input is a terminal?
+3. **WSL.** Which side should a tool be installed on when granite-cli is the
    Windows build running under WSL, and how should the tool be found
    afterwards?
-3. **`install.sh`.** Should it gain an environment variable, such as
+4. **`install.sh`.** Should it gain an environment variable, such as
    `INSTALL=ollama,opencode`, that it passes to `setup --auto --install`?
-4. **How long to wait for a provider after starting it.** This spec uses 10
-   seconds. A first start of Ollama after install may take longer.
 5. **npm global installs that need root.** On Linux, `npm install -g` fails
    with EACCES when npm's global prefix is a system directory. Should
    granite-cli check the prefix first and treat the method as attended?
@@ -719,16 +758,19 @@ with npm.
 
 ## Out of Scope
 
+- Starting, stopping or registering provider servers, with a service manager
+  or otherwise (decision 2).
+- Checking more than one default endpoint for a provider type, such as
+  llama.cpp's old and new default ports (#218).
 - Installing a method's prerequisites: Homebrew, Node.js and npm, uv.
 - Installing a tool's dependencies on other tools, such as Pi for Bob.
 - Upgrading or uninstalling tools.
-- Installing or starting providers on other machines.
+- Installing providers on other machines.
 - Signing up for hosted services, creating API keys, and logging in to agent
   tools. granite-cli shows the page and stops there.
 - Checking checksums or signatures of vendor scripts. granite-cli runs the
   vendor's published command, as a user following the vendor's page would.
-- Running an attended method (decided against, decision 3; see Open Question
-  1).
+- Running an attended method in the TUI.
 - Pulling model weights. This stays as spec 0023 describes.
 
 ## Considered Alternatives
@@ -749,28 +791,24 @@ discovery does for health checks. Install instructions do not depend on an
 instance's settings, and the metadata function already answers type-level
 questions without building one.
 
-**Starting the server as a background child of granite-cli.** granite-cli
-would run `ollama serve` detached and go on. The server would outlive the
-command with no owner: its output would go nowhere, nothing would restart it
-after a reboot, and nothing would stop it. Service managers already do this
-job, so granite-cli uses them where a method names one and otherwise leaves
-starting to the user.
+**Starting the provider from granite-cli.** granite-cli would run a start
+command after the install, either a service manager command such as
+`brew services start ollama` or the server itself as a detached child, then
+wait for the health check. Each provider and platform starts its server
+differently, several providers are not daemons, and a detached child would
+have no owner once granite-cli exits. The PR #202 review asked for
+granite-cli to give instructions here (decision 2).
 
 **Offering installs inside each wizard phase.** The Launchers phase would
 offer launchers, and the Providers phase would offer providers. This keeps
 each offer next to its list, but the Providers phase comes after capabilities
 and models are chosen from the healthy providers, so a provider installed
-there would not inform those choices (decision 5).
+there would not inform those choices (decision 6).
 
 **`setup --auto --install-missing`.** One flag would install the first method
 of the first type of each kind that is missing. It is shorter to type, but
 granite-cli would choose which agent tool and which server to put on the
 user's machine, and the choice would change when the registry order changes.
-
-**Giving the installer the terminal.** Installers would show their own
-progress bars and could ask questions. The TUI cannot hand over its terminal,
-so it would need a second code path, and an installer could stop waiting for
-input that `setup --auto` cannot give.
 
 ---
 
@@ -822,27 +860,31 @@ everything that touches it behind one interface.
 A new module defines install instructions and install methods as described
 in "What install instructions contain". It builds a platform picture from an
 install environment: the operating system, whether this is WSL, and which
-programs the methods need are on PATH. Given install instructions and a
-platform, it returns the methods that apply, in declared order, and for each
-method that does not apply the reason: wrong operating system, program not
-found, attended, or WSL.
+programs the methods need are on PATH. Given install instructions, a
+platform, and whether attended methods may run, it returns the methods that
+apply, in declared order, and for each method that does not apply the reason:
+wrong operating system, program not found, attended, or WSL.
 
 The install environment is an interface with three operations: find a
-program, run a command line through the shell passing each output line to
-the UI, and check a provider type's health. The real environment spawns the
-command with no input and its output captured, and keeps the last 20 lines
-for a failure report. A fake environment answers from a table and records the
-commands it was asked to run.
+program, run a command line through the shell, and check a provider's health.
+Running takes a mode. In the attached mode the command inherits the terminal.
+In the captured mode it gets no input, each output line is passed to the UI
+as it arrives, and the last 20 lines are kept for a failure report. The UI
+gains a way to say whether it can lend the terminal to a command: the
+terminal and plain backends can when standard input is a terminal, and every
+other backend cannot. The real environment does these things; a fake
+environment answers from a table and records the commands it was asked to
+run.
 
 Nothing calls the module yet.
 
 Tests cover: method selection on a Mac with and without Homebrew, on Linux
 with npm only, and on Windows with winget; an attended method listed with its
-reason and never selected; every method listed as not applying under WSL; the
-fake environment recording commands and replaying scripted output; and the
-real environment's output capture, using a command line built into the test
-that prints three lines and exits non-zero, run only through the shell the
-platform always has.
+reason and not selected when attended methods may not run, and selected when
+they may; every method listed as not applying under WSL; the fake environment
+recording commands and replaying scripted output; and the real environment's
+captured mode, using a command line built into the test that prints three
+lines and exits non-zero, run only through the shell the platform always has.
 
 **Relevant Context**
 - `src/utils/shell.rs` (`resolve_shell_command`, PATH lookup via `which`)
@@ -850,6 +892,7 @@ platform always has.
 - `src/launchers/base.rs:139` (`run_command`, spawn on a blocking thread,
   Windows handling)
 - `src/utils/ui/base.rs:126` (`Ui`), `:284` (`CaptureUi`)
+- `src/context.rs` (`AppContext`, where commands reach the UI)
 - AGENTS.md: no unit test may depend on installed binaries or the network
 
 **Status** — `[ ]` not started
@@ -865,22 +908,23 @@ info`.
 **Expected Outcomes**
 
 Provider metadata gains install instructions. Ollama, llama.cpp and LM Studio
-declare their program, page, run command and methods; LM Studio has no
-method that runs, since it is a desktop app. `openai-compatible` and
+declare their program, page, run command, start notes and methods; LM Studio
+has no method that runs, since it is a desktop app. `openai-compatible` and
 OpenRouter declare a note and no methods. Each command is checked against the
 vendor's current instructions and the source is named in a comment.
 
 `provider info <type>` for a catalog type shows the program and whether it was
-found, each method with whether it runs here or why not, the page and the
-note. `docs/data-model.md` lists the new metadata.
+found, each method with whether it runs here or why not, the run command, the
+start notes for this operating system, the page and the note.
+`docs/data-model.md` lists the new metadata.
 
 Tests cover: every registered provider type declaring a page or a note; local
-types declaring a program; hosted types declaring no methods; and `provider
-info` output through the test UI with a fake environment that has Homebrew and
-one that does not.
+types declaring a program and a run command; hosted types declaring no
+methods; and `provider info` output through the test UI with a fake
+environment that has Homebrew and one that does not.
 
 **Relevant Context**
-- `src/providers/base.rs:216` (`ProviderMetadata`, `ProviderType`)
+- `src/providers/base.rs:225` (`ProviderMetadata`, `ProviderType`)
 - `src/providers/{ollama,llamacpp,lmstudio,openai,openrouter}.rs`
   (`metadata()`)
 - `src/commands/provider.rs:116` (`info`)
@@ -933,31 +977,35 @@ Offer, run and follow up an install in one place that the commands can call.
 
 One function offers the install of a type: it lists the methods that apply as
 full commands with a line that installs nothing, runs the chosen one through
-the install environment with its output shown line by line, and reports
-failure with the last 20 lines and the manual instructions. It never prompts
-when the UI is not interactive. A second entry point runs a given type's first
-applicable method without asking, for `setup --auto --install`.
+the install environment, and reports failure with the manual instructions,
+and with the last 20 lines when the output was captured. Attended methods are
+offered only when the UI can lend the terminal, and the command runs attached
+exactly then. It never prompts when the UI is not interactive. A second entry
+point runs a given type's first applicable method without asking and
+captured, for `setup --auto --install`.
 
 After a launcher install, the flow resolves the binary on PATH and then in the
 method's directories, and returns the path found, so the caller can set
-`command_path`. After a provider install, it offers the method's start
-command, then checks health every second for up to 10 seconds; with no start
-command it shows the run command and asks "Check again" or "Continue without
-it". Manual instructions are printed in one format everywhere.
+`command_path`. For a provider, a third function shows how to start the
+server (the run command and the start notes for this operating system) and
+asks "Check again" or "Continue without it", running the health check through
+the install environment on each "Check again". It runs nothing else. Manual
+instructions are printed in one format everywhere.
 
 Tests cover, all with the fake environment and the test UI: declining runs
-nothing; choosing a method runs exactly that command; a failure shows the last
-lines and the manual instructions; a binary found only in a method directory
-is returned with the PATH warning; a provider start command followed by a
-healthy check; "Check again" until healthy; a non-interactive UI never
-prompting; and a type with no applicable method going straight to manual
-instructions.
+nothing; choosing a method runs exactly that command, attached when the UI can
+lend the terminal and captured otherwise; an attended method offered only
+when the UI can lend the terminal; a failure shows the last lines and the
+manual instructions; a binary found only in a method directory is returned
+with the PATH warning; "Check again" until healthy; "Continue without it"
+returning unhealthy; a non-interactive UI never prompting; and a type with no
+applicable method going straight to manual instructions.
 
 **Relevant Context**
 - the module from Sub-Task 1
 - `src/utils/ui/base.rs` (`select`, `confirm`, `is_interactive`)
-- `src/commands/shared/remediation.rs:123` (how a prompt is skipped when the
-  UI is not interactive)
+- `src/commands/shared/remediation.rs` (how a prompt is skipped when the UI
+  is not interactive)
 
 **Status** — `[ ]` not started
 
@@ -989,39 +1037,44 @@ failed launcher setup.
 
 **Relevant Context**
 - `src/commands/launcher.rs:166` (`setup`), `:284` (the failure message)
-- `src/commands/setup.rs:1671` (`select_launchers`), `:1756` (the call whose
-  error ends the wizard)
+- `src/commands/setup.rs` (`select_launchers`, the
+  `LauncherCommands::setup` call whose error ends the wizard)
 
 **Status** — `[ ]` not started
 
 ---
 
-### Sub-Task 6 — `provider setup` offers the install or the start
+### Sub-Task 6 — `provider setup` offers the install and shows how to start
 
 **Intent**
-Let `provider setup` tell "not installed" from "not running", and act on it.
+Let `provider setup` tell "not installed" from "not running", and help with
+each.
 
 **Expected Outcomes**
 
-When the health check fails and the endpoint's host is localhost or a
-loopback address, `provider setup` looks for the type's program. Without it,
-setup calls the install flow and then the start offer. With it, setup goes to
-the start offer. A hosted type, or a provider on another host, gets its note
-or today's warning. The provider is saved before the health check, as today,
-so declining leaves it configured but not healthy.
+`provider setup` runs its health check through the install environment. When
+the check fails and the endpoint's host is localhost or a loopback address,
+setup looks for the type's program. Without it, setup warns that the server
+may be installed elsewhere and not running, and calls the install flow. With
+it, setup says where the program is. In both cases, and after a declined or
+failed install, setup then shows how to start the server and asks "Check
+again" or "Continue without it". A hosted type, or a provider on another
+host, gets its note or today's warning. The provider is saved before the
+health check, as today, so continuing without it leaves it configured but not
+healthy.
 
 The wizard's "Configure a different provider…" entry gains the same
 behaviour through this command.
 
 Tests cover: a missing program leading to the install offer and then the
-start offer; a present program leading to the start offer only; a remote
-endpoint leading to neither; a hosted type showing its note; and a declined
-offer leaving the provider saved.
+start instructions; a present program leading to the start instructions only;
+a remote endpoint leading to neither; a hosted type showing its note; and
+"Continue without it" leaving the provider saved.
 
 **Relevant Context**
 - `src/commands/provider.rs:208` (`setup`), `:292` (health check after save),
-  `:386` (`check_provider_health`)
-- `src/commands/setup.rs:1767` (`select_providers`), `:1863`
+  `:395` (`check_provider_health`)
+- `src/commands/setup.rs` (`select_providers`)
 
 **Status** — `[ ]` not started
 
@@ -1038,11 +1091,15 @@ with what was installed.
 After discovery, for launchers and then for providers, when nothing of that
 kind is detected or configured, the wizard shows a multi-select of the types
 with an applicable method and the command for each, with nothing ticked, and
-lists the other types underneath. It repeats the chosen commands and asks
-once before running them. Installs run in order, with the start offer for
-each provider; a failure is reported and the rest go on. Discovery then runs
-again, and installed types are ticked in the Launchers and Providers lists.
-The summary names a command for each kind that is still empty.
+lists the other types underneath. A local provider whose program is on PATH
+is listed as installed and not running, with its run command, and is not
+offered. The wizard repeats the chosen commands and asks once before running
+them. Installs run in order; a failure is reported and the rest go on. When a
+provider was installed or is installed and not running, the wizard shows how
+to start each one and asks "Check again" or "Continue without them".
+Discovery then runs again, and installed types are ticked in the Launchers
+and Providers lists. The summary names a command for each kind that is still
+empty.
 
 Discovery today calls real health checks and PATH lookups, so the install
 step takes the discovery result as an argument and runs discovery again
@@ -1050,12 +1107,14 @@ through a function the tests replace.
 
 Tests cover: no step when a launcher and a provider are detected; the launcher
 step alone when only providers are detected; pressing `Enter` running
-nothing; two installs with one failing and the other ticked in the next
+nothing; a provider with its program on PATH listed as not running and not
+offered; two installs with one failing and the other ticked in the next
 phase; and the summary hints for empty kinds.
 
 **Relevant Context**
-- `src/commands/setup.rs:82` (`run_with_hardware`), `:1186` (`run_wizard`),
-  `:1671` and `:1767` (manual entries are ticked), `:2648` (`print_summary`)
+- `src/commands/setup.rs` (`run_with_hardware`, `run_wizard`,
+  `select_launchers` and `select_providers` where manual entries are ticked,
+  `print_summary`)
 - `src/commands/setup.rs` tests `run_wizard_with_empty_config_shows_info` and
   `run_auto_with_no_recommendations_shows_info`, which run real discovery
 
@@ -1074,22 +1133,24 @@ asked.
 When a kind has nothing detected or configured, `setup --auto` prints a
 warning with the command for each type that has an applicable method and the
 `--install` form. `setup` gains `--install <type>`, repeatable and requiring
-`--auto`. Each named type is installed with its first applicable method,
-providers are started when the method has a start command, and discovery runs
-afterwards. A named type that is unknown, has no applicable method, or fails
-to install is reported, setup continues, and the exit status is non-zero at
-the end. The README documents the flag next to the other setup flags.
+`--auto`. Each named type is installed with its first applicable method that
+is not attended, captured, before discovery. A provider installed this way is
+reported with its run command, and is not started. A named type that is
+unknown, has no applicable method, or fails to install is reported, setup
+continues, and the exit status is non-zero at the end. The README documents
+the flag next to the other setup flags.
 
 Tests cover: the warnings on an empty run, with no command run; `--install`
-running exactly the named types' commands; an unknown type and a type with no
-applicable method reported with a non-zero exit; and `--install` without
-`--auto` rejected by the argument parser.
+running exactly the named types' commands; an installed provider reported
+with its run command and no other command run; an unknown type and a type
+with no applicable method reported with a non-zero exit; and `--install`
+without `--auto` rejected by the argument parser.
 
 **Relevant Context**
-- `src/main.rs:160` (`Commands::Setup`), `:641` (routing)
-- `src/commands/setup.rs:1304` (`run_auto_with_hardware`), `:1315` (the
-  empty check that discovery never meets)
-- `README.md` (setup flags), `install.sh:681` (`run_granite_setup`)
+- `src/main.rs:161` (`Commands::Setup`), `:674` (routing)
+- `src/commands/setup.rs` (`run_auto_with_hardware`, and its empty check that
+  discovery never meets)
+- `README.md` (setup flags), `install.sh` (`run_granite_setup`)
 
 **Status** — `[ ]` not started
 
@@ -1102,20 +1163,21 @@ Show installer output in the setup pane, and let `Esc` stop the installer.
 
 **Expected Outcomes**
 
-Installer output lines appear in the pane's output log as they arrive. While
-an installer runs, the footer reads "[Esc] Stop install", and `Esc` stops the
-installer process and closes the pane, with nothing saved. The rest of the
-offer uses the prompts the pane already supports.
+The TUI cannot lend the terminal, so installs from the pane run captured and
+attended methods are shown as instructions. Installer output lines appear in
+the pane's output log as they arrive. While an installer runs, the footer
+reads "[Esc] Stop install", and `Esc` stops the installer process and closes
+the pane, with nothing saved. The rest of the offer uses the prompts the pane
+already supports.
 
 Tests cover: output lines from a fake installer reaching the pane; the footer
-hint while an installer runs; and `Esc` reaching the fake environment as a
+hint while an installer runs; and `Esc` reaching the install environment as a
 stop request.
 
 **Relevant Context**
-- `src/utils/ui/app.rs:2441` (`spawn_setup`), `:2357` (logger silenced while
-  the TUI owns the terminal)
+- `src/utils/ui/app.rs` (`spawn_setup`; the logger silenced while the TUI
+  owns the terminal in `run_interactive_tui`)
 - `src/utils/ui/setup_pane.rs:196` (`Esc` acts at the next prompt)
 - `src/utils/ui/tui_ui.rs` (`OutputLine`)
 
 **Status** — `[ ]` not started
-
