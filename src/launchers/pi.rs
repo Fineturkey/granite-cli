@@ -877,13 +877,24 @@ mod tests {
     }
 
     #[test]
-    fn api_name_maps_supported_dialects_and_rejects_ollama() {
+    fn api_name_maps_supported_dialects_and_rejects_unsupported() {
         assert_eq!(pi_api_name(&ApiType::OpenAI).unwrap(), "openai-completions");
         assert_eq!(
             pi_api_name(&ApiType::Anthropic).unwrap(),
             "anthropic-messages"
         );
         assert!(pi_api_name(&ApiType::Ollama).is_err());
+        assert!(pi_api_name(&ApiType::Jev).is_err());
+    }
+
+    #[test]
+    fn base_url_for_jev_endpoint_has_no_operation_prefix() {
+        let b = AgentModelBinding {
+            api_type: ApiType::Jev,
+            endpoint_path: "/v1/systemone".to_string(),
+            ..binding()
+        };
+        assert_eq!(pi_base_url(&b), "http://localhost:11434");
     }
 
     // -- env overlay -----------------------------------------------------------
