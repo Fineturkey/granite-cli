@@ -157,6 +157,26 @@ detect_chat_template_signals() {
         '{supports_tool_calling: $tools, supports_thinking: $thinking}'
 }
 
+# Detects which OpenAI `reasoning_effort` values the chat template honors by
+# looking for each known value quoted inside a Jinja statement/expression
+# that mentions `reasoning_effort`. Prints a JSON array (empty when the
+# template never references `reasoning_effort`).
+detect_reasoning_efforts() {
+    local template="$1"
+    local efforts=()
+    local effort
+    for effort in none minimal low medium high xhigh; do
+        if echo "$template" | grep -qE "reasoning_effort[^%}]*[\"']${effort}[\"']"; then
+            efforts+=("$effort")
+        fi
+    done
+    if [ "${#efforts[@]}" -eq 0 ]; then
+        echo "[]"
+    else
+        printf '%s\n' "${efforts[@]}" | jq -R . | jq -s -c .
+    fi
+}
+
 # Returns success if `repo` is a quantized/converted derivative of another
 # model (GGUF, fp8, nvfp4, mxfp4, <quant>-mlx, ...) rather than a catalog
 # model in its own right. These repos are also members of the core model
@@ -240,6 +260,7 @@ fetch_model_metadata() {
     capabilities=$(detect_chat_template_signals "$chat_template")
     supports_tool_calling=$(echo "$capabilities" | jq -r '.supports_tool_calling')
     supports_thinking=$(echo "$capabilities" | jq -r '.supports_thinking')
+    supported_reasoning_efforts=$(detect_reasoning_efforts "$chat_template")
 
     # Infer model type from family
     if [[ "$family" == *"Vision"* ]] || [[ "$family" == *"Docling"* ]]; then
@@ -264,6 +285,7 @@ fetch_model_metadata() {
         --argjson config "$config" \
         --argjson supports_tool_calling "$supports_tool_calling" \
         --argjson supports_thinking "$supports_thinking" \
+        --argjson supported_reasoning_efforts "$supported_reasoning_efforts" \
         '{
             repo: $repo,
             family: $family,
@@ -276,7 +298,8 @@ fetch_model_metadata() {
             architecture: $architecture,
             config: $config,
             supports_tool_calling: $supports_tool_calling,
-            supports_thinking: $supports_thinking
+            supports_thinking: $supports_thinking,
+            supported_reasoning_efforts: $supported_reasoning_efforts
         }'
 
     sleep "$REQUEST_DELAY"
