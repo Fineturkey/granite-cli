@@ -332,6 +332,7 @@ mod tests {
             verify_ssl: true,
             context_length: Some(131072),
             custom_headers: None,
+            supported_reasoning_efforts: vec![],
         }
     }
 
@@ -499,6 +500,7 @@ mod tests {
         headers.insert("Authorization".to_string(), Secret::from("Bearer token"));
         let b = AgentModelBinding {
             custom_headers: Some(headers),
+            supported_reasoning_efforts: vec![],
             ..binding()
         };
         let config = generate_config(Some(&b), &[]);
@@ -526,6 +528,7 @@ mod tests {
     fn generate_config_omits_headers_when_empty() {
         let b = AgentModelBinding {
             custom_headers: Some(std::collections::HashMap::new()),
+            supported_reasoning_efforts: vec![],
             ..binding()
         };
         let config = generate_config(Some(&b), &[]);

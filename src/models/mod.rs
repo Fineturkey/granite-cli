@@ -259,7 +259,7 @@ mod base;
 pub(crate) use base::find_variant;
 pub use base::{
     ConfiguredModel, LayerKind, LayerTypeCount, MambaShape, Model, ModelArchitecture,
-    ModelFunction, ModelLookup, ModelMetadata, ModelType, ModelVariant,
+    ModelFunction, ModelLookup, ModelMetadata, ModelType, ModelVariant, ReasoningEffort,
 };
 
 mod custom;

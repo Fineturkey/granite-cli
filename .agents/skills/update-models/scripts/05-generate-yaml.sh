@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+#DEBUG
+set -x
+
 # Generates YAML from model metadata JSON
 # Input: models.json
 # Output: models.yaml
@@ -97,6 +100,11 @@ EOF
   supported_functions:
 EOF
     echo "$functions" | jq -r '.[] | "    - \(.)"'
+    local efforts=$(echo "$model" | jq -c '.supported_reasoning_efforts // []')
+    if [ "$efforts" != "[]" ]; then
+        echo "  supported_reasoning_efforts:"
+        echo "$efforts" | jq -r '.[] | "    - \(.)"'
+    fi
     cat <<EOF
   variants:
 EOF
