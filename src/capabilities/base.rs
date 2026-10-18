@@ -255,6 +255,33 @@ pub enum McpBinding {
     },
 }
 
+/// Request payload for `BindingType::VoiceInput` -- which `ApiType` the
+/// launcher's speech-to-text client speaks.
+#[derive(Debug, Clone)]
+pub struct VoiceInputBindingRequest {
+    pub api_type: ApiType,
+}
+
+/// Result payload for `BindingType::VoiceInput`: the connection details of a
+/// transcription model, plus the knobs a launcher's speech-to-text client
+/// commonly takes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoiceInputBinding {
+    pub api_type: ApiType,
+    pub provider_name: String,
+    pub base_url: String,
+    pub model_name: String,
+    /// Full path of the transcription endpoint (e.g. `/v1/audio/transcriptions`).
+    pub endpoint_path: String,
+    pub api_key: Option<Secret>,
+    pub verify_ssl: bool,
+    /// Language hint (e.g. `en`). `None` lets the model auto-detect.
+    pub language: Option<String>,
+    pub timeout_seconds: u64,
+    pub max_retries: u32,
+    pub custom_headers: Option<HashMap<String, Secret>>,
+}
+
 define_bindings! {
     AgentModel {
         request: AgentModelBindingRequest,
@@ -270,6 +297,11 @@ define_bindings! {
         request: SubAgentBindingRequest,
         result: SubAgentBinding,
         display: "Sub-Agent",
+    },
+    VoiceInput {
+        request: VoiceInputBindingRequest,
+        result: VoiceInputBinding,
+        display: "Voice Input",
     },
 }
 
