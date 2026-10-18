@@ -150,6 +150,10 @@ impl crate::capabilities::ResolvedCapability for ResolvedAgentModelCapability {
             verify_ssl: provider.verify_ssl(),
             context_length: Some(configured_model.model.context_length()),
             custom_headers: provider.custom_headers(),
+            supported_reasoning_efforts: configured_model
+                .model
+                .supported_reasoning_efforts()
+                .to_vec(),
         }))
     }
 }

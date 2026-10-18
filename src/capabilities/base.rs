@@ -136,6 +136,10 @@ pub struct AgentModelBinding {
     pub context_length: Option<u64>,
     /// Custom headers to be sent with each request to the provider.
     pub custom_headers: Option<HashMap<String, Secret>>,
+    /// `reasoning_effort` values the model's chat template understands, so a
+    /// launcher can expose only the effort settings that will take effect.
+    /// Empty when the model has no effort control.
+    pub supported_reasoning_efforts: Vec<crate::models::ReasoningEffort>,
 }
 
 /// Request payload for `BindingType::SubAgent` -- which `ApiType` the
