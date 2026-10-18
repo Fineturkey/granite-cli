@@ -154,6 +154,7 @@ To regenerate it after adding a launcher or capability, run `scripts/update-capa
 | Capability | Type | `claude` | `bob` | `pi` | `opencode` | `hermes` | `goose` | `openclaw` |
 |---|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | `agent-model` | Agent Model Binding | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `speech-to-text` | Speech To Text | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
 | `vision-mcp` | Vision MCP Server | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
 | `sub-agent` | Sub-Agent | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
 | `sub-agent-code` | Code Sub-Agent | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
@@ -165,6 +166,7 @@ To regenerate it after adding a launcher or capability, run `scripts/update-capa
 | Capability | Description |
 |---|---|
 | `agent-model` | Surfaces a configured model's connection details (base URL, model name, auth, TLS) to a launched agent. |
+| `speech-to-text` | Surfaces a transcription model's connection details to a launched agent's voice input mode. |
 | `vision-mcp` | Exposes a vision-language model as an MCP server (compare/analyze images) for a launched coding agent to call. |
 | `sub-agent` | Defines a named sub-agent (prompt, tool allow-list, and model) that a launched coding agent can delegate to. |
 | `sub-agent-code` | Defines a named coding sub-agent (static prompt, fixed tools, and model) that a launched coding agent can delegate to. |
@@ -175,6 +177,7 @@ To regenerate it after adding a launcher or capability, run `scripts/update-capa
 - **AgentModel** — passes a model's connection details directly to the launcher
 - **Mcp** — exposes the capability as an MCP server the launcher can call
 - **SubAgent** — exposes the capability as a named sub-agent the launcher can delegate to
+- **VoiceInput** — passes a transcription model's connection details to the launcher's voice input mode
 
 <!-- capability-table-end -->
 
