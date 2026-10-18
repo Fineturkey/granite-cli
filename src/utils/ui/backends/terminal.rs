@@ -881,4 +881,15 @@ mod tests {
         let widths = vec![8, 8];
         render_rows_with_wrapping(&rows, &widths);
     }
+
+    #[test]
+    fn is_interactive_follows_stdin_and_stderr() {
+        use std::io::IsTerminal;
+        let out = TerminalOutput::new("terminal", &serde_json::json!({})).unwrap();
+        let expected = crate::utils::ui::base::can_prompt(
+            std::io::stdin().is_terminal(),
+            std::io::stderr().is_terminal(),
+        );
+        assert_eq!(out.is_interactive(), expected);
+    }
 }

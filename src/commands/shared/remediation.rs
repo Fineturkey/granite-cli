@@ -131,8 +131,9 @@ pub(crate) enum Removal {
 /// - `Some(Leave)`: removes only the target; warns about what was left
 ///   broken. Same as the old non-interactive fallback.
 /// - `None`, interactive session: prompts the user with three choices.
-/// - `None`, non-interactive session (`--output json` / `--output markdown`):
-///   same as `Leave` — warns and removes only the target.
+/// - `None`, non-interactive session (`--output json` / `--output markdown`,
+///   or no terminal to ask on): fails with a non-zero exit, like `Refuse`,
+///   with an error that names the three policies.
 pub(crate) fn confirm_removal(
     ctx: &crate::AppContext,
     kind: RefKind,
