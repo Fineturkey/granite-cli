@@ -13,6 +13,7 @@ use_channel!("CAPBL");
 pub static CAPABILITY_REGISTRY: LazyLock<base::CapabilityFactory> = LazyLock::new(|| {
     let mut factory = base::CapabilityFactory::new();
     factory.register::<agent_model::AgentModelCapability>("agent-model");
+    factory.register::<speech_to_text::SpeechToTextCapability>("speech-to-text");
     factory.register::<vision_mcp::VisionMCPCapability>("vision-mcp");
     factory.register::<sub_agent::SubAgentCapability>("sub-agent");
     factory.register::<sub_agent_code::CodeSubAgentCapability>("sub-agent-code");
@@ -143,7 +144,7 @@ pub use base::{
     AgentModelBinding, AgentModelBindingRequest, Binding, BindingRequest, BindingType, Capability,
     CapabilityInfo, CapabilityMetadata, Dependency, EnvBinding, KnownSubAgent, LaunchContext,
     McpBinding, McpBindingRequest, McpTransportKind, ResolvedCapability, SubAgentBinding,
-    SubAgentBindingRequest, ToolName,
+    SubAgentBindingRequest, ToolName, VoiceInputBinding, VoiceInputBindingRequest,
 };
 
 mod requirement;
@@ -151,6 +152,9 @@ pub use requirement::{ModelRequirement, ProviderRequirement, ShellCommandRequire
 
 mod agent_model;
 pub use agent_model::{AgentModelCapability, AgentModelCapabilityConfig};
+
+mod speech_to_text;
+pub use speech_to_text::{SpeechToTextCapability, SpeechToTextCapabilityConfig};
 
 mod vision_mcp;
 pub use vision_mcp::{VisionMCPCapability, VisionMCPCapabilityConfig};
