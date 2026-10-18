@@ -529,6 +529,7 @@ mod tests {
                 verify_ssl: true,
                 context_length: Some(4096),
                 custom_headers: Some(headers),
+                supported_reasoning_efforts: vec![],
             }),
             vec![],
         );
@@ -557,6 +558,7 @@ mod tests {
                 verify_ssl: true,
                 context_length: Some(4096),
                 custom_headers: None,
+                supported_reasoning_efforts: vec![],
             }),
             vec![],
         );
@@ -578,6 +580,7 @@ mod tests {
                 verify_ssl: true,
                 context_length: Some(4096),
                 custom_headers: Some(HashMap::new()),
+                supported_reasoning_efforts: vec![],
             }),
             vec![],
         );
@@ -654,6 +657,7 @@ mod tests {
                 verify_ssl: true,
                 context_length: Some(4096),
                 custom_headers: None,
+                supported_reasoning_efforts: vec![],
             },
             known_type: None,
         }
@@ -894,6 +898,7 @@ mod tests {
                 verify_ssl: true,
                 context_length: Some(4096),
                 custom_headers: None,
+                supported_reasoning_efforts: vec![],
             }),
             vec![(
                 "reviewer".to_string(),
