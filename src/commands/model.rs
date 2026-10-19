@@ -334,7 +334,7 @@ impl ModelCommands {
             })
             .collect();
 
-        rows.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        sort_recommend_rows(&mut rows);
         rows.into_iter().map(|(_, row)| row).collect()
     }
 
@@ -1059,6 +1059,13 @@ pub async fn ensure_model_pulled(
 
 /*-- private ---------------------------------------------------------------------*/
 
+/// Orders `recommend` rows, each paired with its variant size in GB, by
+/// size, largest first. MODEL_REGISTRY.entries() comes in no fixed order, so
+/// rows with the same size are ordered by model id, the first column.
+fn sort_recommend_rows(rows: &mut [(f64, Vec<String>)]) {
+    rows.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1[0].cmp(&b.1[0])));
+}
+
 /// The `Config: Variant` value `model info` shows for a configured model.
 fn variant_field(variant: &Option<String>) -> String {
     variant.clone().unwrap_or_else(|| "(not set)".to_string())
@@ -1755,6 +1762,32 @@ mod tests {
         assert!(
             !rows.is_empty(),
             "a permissive configured provider should surface recommendations"
+        );
+    }
+
+    #[test]
+    fn recommend_rows_with_the_same_variant_size_are_ordered_by_id() {
+        let row = |size: f64, id: &str| (size, vec![id.to_string()]);
+        let mut rows = vec![
+            row(4.9, "granite-speech-3.2-8b"),
+            row(6.7, "granite-guardian-3.3-8b"),
+            row(4.9, "granite-3.0-8b-instruct"),
+            row(f64::MAX, "no-size"),
+            row(4.9, "granite-3.2-8b-instruct"),
+        ];
+
+        sort_recommend_rows(&mut rows);
+
+        let ids: Vec<&str> = rows.iter().map(|(_, r)| r[0].as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "no-size",
+                "granite-guardian-3.3-8b",
+                "granite-3.0-8b-instruct",
+                "granite-3.2-8b-instruct",
+                "granite-speech-3.2-8b",
+            ]
         );
     }
 

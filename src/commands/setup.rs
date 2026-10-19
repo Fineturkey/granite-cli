@@ -2666,59 +2666,29 @@ impl SetupCommands {
         let ui = &*ctx.ui;
 
         ui.info("\n=== Setup Complete ===");
-        ui.info(&format!(
-            "Providers: {}",
-            if selected_providers.is_empty() {
-                "none".to_string()
-            } else {
-                selected_providers
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            }
-        ));
-        ui.info(&format!(
-            "Models: {}",
-            if selected_models.is_empty() {
-                "none".to_string()
-            } else {
-                selected_models
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            }
-        ));
-        ui.info(&format!(
-            "Launchers: {}",
-            if selected_launchers.is_empty() {
-                "none".to_string()
-            } else {
-                selected_launchers
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            }
-        ));
-        ui.info(&format!(
-            "Capabilities: {}",
-            if selected_caps.is_empty() {
-                "none".to_string()
-            } else {
-                selected_caps.iter().cloned().collect::<Vec<_>>().join(", ")
-            }
-        ));
+        ui.info(&format!("Providers: {}", summary_list(selected_providers)));
+        ui.info(&format!("Models: {}", summary_list(selected_models)));
+        ui.info(&format!("Launchers: {}", summary_list(selected_launchers)));
+        ui.info(&format!("Capabilities: {}", summary_list(selected_caps)));
 
         ui.info("\nRun `granite-cli launcher list` to see configured launchers.");
-        if !selected_launchers.is_empty() {
-            let first_launcher = selected_launchers.iter().next().unwrap();
+        if let Some(first_launcher) = selected_launchers.iter().min() {
             ui.info(&format!(
                 "Run `granite-cli launch {first_launcher}` to launch with Granite overlay.",
             ));
         }
     }
+}
+
+/// The ids in `ids` as one line of the setup summary, sorted so that the same
+/// selection reads the same on every run, or `none` when there are none.
+fn summary_list(ids: &HashSet<String>) -> String {
+    if ids.is_empty() {
+        return "none".to_string();
+    }
+    let mut sorted: Vec<&str> = ids.iter().map(String::as_str).collect();
+    sorted.sort_unstable();
+    sorted.join(", ")
 }
 
 /*-- tests -------------------------------------------------------------------*/
@@ -4575,6 +4545,32 @@ mod tests {
             "No provider was selected to run model 'granite-4.2-8b' (variant GGUF/Q8_0). \
              Run setup again and select a provider that can run it."
         );
+    }
+
+    #[test]
+    fn the_summary_lists_ids_in_sorted_order() {
+        let capture = Arc::new(CaptureUi::default());
+        let ctx = crate::AppContext::new(Config::default(), capture.clone());
+        let set = |ids: &[&str]| -> HashSet<String> { ids.iter().map(|s| s.to_string()).collect() };
+
+        SetupCommands::print_summary(
+            &ctx,
+            &set(&["vision-mcp", "agent-model", "sub-agent-explore"]),
+            &set(&["pi", "claude", "opencode", "bob"]),
+            &set(&["openrouter", "ollama"]),
+            &HashSet::new(),
+        );
+
+        let infos = capture.infos.borrow().clone();
+        for expected in [
+            "Providers: ollama, openrouter",
+            "Models: none",
+            "Launchers: bob, claude, opencode, pi",
+            "Capabilities: agent-model, sub-agent-explore, vision-mcp",
+            "Run `granite-cli launch bob` to launch with Granite overlay.",
+        ] {
+            assert!(infos.iter().any(|i| i == expected), "{expected}: {infos:?}");
+        }
     }
 
     // -- configure_all guards --------------------------------------------------
