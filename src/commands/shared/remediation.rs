@@ -92,8 +92,9 @@ pub(crate) fn prompt_with_current(
 /// at the entity being removed.
 ///
 /// Passed as `--dependents <cascade|refuse|leave>` on the CLI. When the flag
-/// is omitted the caller passes `None` and the behaviour falls back to asking
-/// interactively (or leaving dependents stranded in non-interactive sessions).
+/// is omitted the caller passes `None`: an interactive session asks what to
+/// do, and a session that cannot ask refuses with exit code 1 and an error
+/// naming the three policies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum DependentsPolicy {
     /// Remove the target and every dependent automatically, without asking.
@@ -103,7 +104,6 @@ pub enum DependentsPolicy {
     /// on it.
     Refuse,
     /// Remove only the target. Dependents are left configured but broken.
-    /// This is the non-interactive default when no flag is given.
     Leave,
 }
 
