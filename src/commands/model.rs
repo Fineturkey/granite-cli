@@ -629,13 +629,11 @@ impl ModelCommands {
 
                 ctx.ui.detail("Type Metadata", &type_fields);
 
-                let mut instance_fields: Vec<(&str, String)> = Vec::new();
-                instance_fields.push(("Config: Type", model_config.model_type.clone()));
-                instance_fields.push((
-                    "Config: Provider",
-                    format!("{:?}", model_config.provider_id),
-                ));
-                instance_fields.push(("Config: Variant", format!("{:?}", model_config.variant)));
+                let instance_fields: Vec<(&str, String)> = vec![
+                    ("Config: Type", model_config.model_type.clone()),
+                    ("Config: Provider", model_config.provider_id.clone()),
+                    ("Config: Variant", variant_field(&model_config.variant)),
+                ];
                 ctx.ui.detail(id, &instance_fields);
                 return Ok(());
             }
@@ -646,10 +644,10 @@ impl ModelCommands {
                 ctx.ui.detail("Type Metadata", &type_fields);
 
                 if let Some(configured) = ctx.config().get_model(id) {
-                    let mut instance_fields: Vec<(&str, String)> = Vec::new();
-                    instance_fields
-                        .push(("Config: Provider", format!("{:?}", configured.provider_id)));
-                    instance_fields.push(("Config: Variant", format!("{:?}", configured.variant)));
+                    let instance_fields: Vec<(&str, String)> = vec![
+                        ("Config: Provider", configured.provider_id.clone()),
+                        ("Config: Variant", variant_field(&configured.variant)),
+                    ];
 
                     ctx.ui.detail(id, &instance_fields);
                 }
@@ -1057,6 +1055,13 @@ pub async fn ensure_model_pulled(
     ui: &dyn Ui,
 ) -> Result<PullResult, crate::providers::ProviderError> {
     provider.pull_model(model, variant, ui).await
+}
+
+/*-- private ---------------------------------------------------------------------*/
+
+/// The `Config: Variant` value `model info` shows for a configured model.
+fn variant_field(variant: &Option<String>) -> String {
+    variant.clone().unwrap_or_else(|| "(not set)".to_string())
 }
 
 /*-- tests -----------------------------------------------------------------------*/
@@ -2061,6 +2066,43 @@ mod tests {
             fields2
                 .iter()
                 .any(|(k, v)| k == "Config: Type" && v == "custom")
+        );
+        assert!(
+            fields2
+                .iter()
+                .any(|(k, v)| k == "Config: Provider" && v == "ollama"),
+            "{fields2:?}"
+        );
+        assert!(
+            fields2
+                .iter()
+                .any(|(k, v)| k == "Config: Variant" && v == "(not set)"),
+            "{fields2:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn info_shows_the_configured_variant_as_written() {
+        let mut ctx = ctx_with_custom_model(
+            "my-custom",
+            serde_json::json!({ "family": "My Local Model" }),
+            None,
+        );
+        ctx.config_mut()
+            .models
+            .get_mut("my-custom")
+            .unwrap()
+            .variant = Some("GGUF/Q8_0".to_string());
+
+        ModelCommands::info(&mut ctx, "my-custom").await.unwrap();
+
+        let details = details!(ctx);
+        let (_, fields) = &details[1];
+        assert!(
+            fields
+                .iter()
+                .any(|(k, v)| k == "Config: Variant" && v == "GGUF/Q8_0"),
+            "{fields:?}"
         );
     }
 
