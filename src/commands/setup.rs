@@ -2304,9 +2304,14 @@ impl SetupCommands {
                 None => (selected_providers.iter().next().cloned(), None),
             };
             if provider_id.is_none() {
-                let err = format!("Failed to find provider for {model_id}/{chosen_variant:#?}");
-                ui.warn(&err);
-                anyhow::bail!(err);
+                let for_variant = variant
+                    .as_deref()
+                    .map(|v| format!(" (variant {v})"))
+                    .unwrap_or_default();
+                anyhow::bail!(
+                    "No provider was selected to run model '{model_id}'{for_variant}. \
+                     Run setup again and select a provider that can run it."
+                );
             }
 
             let model_config = crate::config::ModelConfig {
@@ -4525,6 +4530,50 @@ mod tests {
                 &["ollama".to_string(), "lm-studio".to_string()],
             ),
             "granite-4.2-8b — 8B — Fit: Partial (32K) — runs on: ollama, lm-studio"
+        );
+    }
+
+    #[tokio::test]
+    async fn configure_all_names_the_model_and_variant_when_no_provider_was_selected() {
+        let _home = crate::config::TestConfigHome::new();
+        let mut ctx = test_ctx();
+        let discovery = DiscoveryResult {
+            recommendations: vec![],
+            all_model_candidates: vec![],
+            configured_provider_ids: vec![],
+            configured_model_ids: vec![],
+            configured_launcher_ids: vec![],
+            configured_capability_ids: vec![],
+        };
+        let model_id = "granite-4.2-8b".to_string();
+        let selected_models: HashSet<String> = [model_id.clone()].into_iter().collect();
+        let variant = ModelVariant {
+            format: "GGUF".to_string(),
+            precision: "Q8_0".to_string(),
+            size_gb: None,
+            url: String::new(),
+        };
+        let selected_variants: HashMap<String, ModelVariant> =
+            [(model_id.clone(), variant)].into_iter().collect();
+
+        let err = SetupCommands::configure_all(
+            &mut ctx,
+            &discovery,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &selected_models,
+            &selected_variants,
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "No provider was selected to run model 'granite-4.2-8b' (variant GGUF/Q8_0). \
+             Run setup again and select a provider that can run it."
         );
     }
 
