@@ -42,7 +42,8 @@ pub(crate) enum Outcome {
     /// Nothing was broken, or everything broken was fixed.
     Clean,
     /// Something is still broken: the user declined to fix it, or there was
-    /// nobody to ask.
+    /// nobody to ask. Also returned when the user chose to remove the
+    /// instance the caller named, which leaves nothing to validate.
     Unresolved,
 }
 
@@ -256,10 +257,10 @@ pub(crate) fn remove_all(
 /// that instance, since a capability may be enabled by more than one launcher.
 ///
 /// The loop ends when validation comes back clean, when the user declines,
-/// or when every repair on offer has been tried against the same problem. A
-/// repair that changes nothing is dropped from the choices rather than ending
-/// the run, so it always terminates and always leaves the remaining repairs
-/// reachable.
+/// when a removal takes the instance the caller named, or when every repair
+/// on offer has been tried against the same problem. A repair that changes
+/// nothing is dropped from the choices rather than ending the run, so it
+/// always terminates and always leaves the remaining repairs reachable.
 pub(crate) async fn remediate(
     ctx: &mut crate::AppContext,
     kind: RefKind,
@@ -317,6 +318,14 @@ pub(crate) async fn remediate(
             Choice::Remove => {
                 previous = Some(error);
                 remove(ctx, fix.kind, &fix.id, None)?;
+                // The removal took the instance the caller named, either as
+                // the fix itself or as a dependent of it. Validating again
+                // would report it as not configured right after the removal
+                // said it was removed. The caller checks whether it still
+                // exists.
+                if type_name(kind, id, ctx.config()).is_none() {
+                    return Ok(Outcome::Unresolved);
+                }
             }
             Choice::Disable => {
                 previous = Some(error);
@@ -1389,6 +1398,35 @@ mod tests {
             Some("gone-provider"),
         );
         assert!(capture(&ctx).confirm_answers.borrow().is_empty());
+    }
+
+    #[tokio::test]
+    async fn removing_the_named_instance_ends_without_reporting_it_missing() {
+        let _home = crate::config::TestConfigHome::new();
+        let mut ctx = ctx_with_a_dangling_provider_ref();
+        // Reconfigure, remove, skip: remove is the second.
+        answer(&ctx, &[1]);
+
+        let outcome = remediate(
+            &mut ctx,
+            RefKind::Model,
+            "granite-3.1-8b-instruct",
+            OnDecline::Skip,
+            true,
+        )
+        .await
+        .unwrap();
+
+        assert!(ctx.config().get_model("granite-3.1-8b-instruct").is_none());
+        assert_eq!(outcome, Outcome::Unresolved);
+        assert_eq!(prompts(&ctx).len(), 1);
+        let warns = capture(&ctx).warns.borrow().clone();
+        assert!(
+            !warns
+                .iter()
+                .any(|w| w == "model 'granite-3.1-8b-instruct' is not configured"),
+            "the model the user chose to remove is not reported as missing: {warns:?}"
+        );
     }
 
     #[tokio::test]
