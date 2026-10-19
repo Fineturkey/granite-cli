@@ -2005,13 +2005,19 @@ impl SetupCommands {
         }
     }
 
+    /// One line of the model picker. `providers` are the providers already
+    /// configured before this run that can run the model's best variant. It
+    /// is empty on a first setup, whose providers are chosen after the
+    /// models, so the line names providers only when there are some.
     fn format_model_option(id: &str, size: &str, fit: ContextFit, providers: &[String]) -> String {
-        let providers_str = if providers.is_empty() {
-            "none".to_string()
+        if providers.is_empty() {
+            format!("{id} — {size} — Fit: {fit}")
         } else {
-            providers.join(", ")
-        };
-        format!("{id} — {size} — Fit: {fit} ({providers_str})")
+            format!(
+                "{id} — {size} — Fit: {fit} — runs on: {}",
+                providers.join(", ")
+            )
+        }
     }
 
     fn model_options(recs: Vec<&Recommendation>) -> Vec<(String, String, ContextFit, Vec<String>)> {
@@ -4502,6 +4508,23 @@ mod tests {
         assert!(
             !defaults[0],
             "the escape-hatch item should NOT be pre-selected (user must explicitly choose it)"
+        );
+    }
+
+    #[test]
+    fn a_model_option_names_providers_only_when_some_can_run_it() {
+        assert_eq!(
+            SetupCommands::format_model_option("granite-4.2-8b", "8B", ContextFit::Full, &[]),
+            "granite-4.2-8b — 8B — Fit: Full"
+        );
+        assert_eq!(
+            SetupCommands::format_model_option(
+                "granite-4.2-8b",
+                "8B",
+                ContextFit::Partial(32 * 1024),
+                &["ollama".to_string(), "lm-studio".to_string()],
+            ),
+            "granite-4.2-8b — 8B — Fit: Partial (32K) — runs on: ollama, lm-studio"
         );
     }
 
