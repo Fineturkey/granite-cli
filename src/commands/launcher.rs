@@ -113,11 +113,9 @@ impl LauncherCommands {
                             .push(("Enabled Capabilities", cfg.enabled_capabilities.join(", ")));
                     }
 
-                    if let Some(obj) = cfg.config.as_object() {
-                        for (k, v) in obj {
-                            instance_fields.push(("Config", format!("{k} = {v}")))
-                        }
-                    }
+                    let config_fields = crate::commands::shared::config_fields(&cfg.config);
+                    instance_fields
+                        .extend(config_fields.iter().map(|(k, v)| (k.as_str(), v.clone())));
 
                     ctx.ui.detail(id, &instance_fields);
                 }
