@@ -1790,6 +1790,17 @@ impl SetupCommands {
         // NOTE: no early return here when filtered.is_empty() -- the escape hatch
         // below is exactly what a user needs when no providers are healthy.
 
+        // Providers configured before this run. Discovery leaves them out, but
+        // models can be assigned to them, so they are offered pre-checked.
+        let mut configured: Vec<String> = ctx
+            .config()
+            .providers
+            .keys()
+            .filter(|id| !filtered.iter().any(|(f, ..)| f == *id))
+            .cloned()
+            .collect();
+        configured.sort();
+
         let mut manual: Vec<String> = Vec::new(); // ids configured via the escape hatch this run
 
         loop {
@@ -1808,11 +1819,15 @@ impl SetupCommands {
                 })
                 .collect();
             let mut defaults = vec![false; items.len()];
+            for id in &configured {
+                items.push(format!("{id} — configured"));
+                defaults.push(true);
+            }
             for id in &manual {
                 items.push(format!("{id} — manually configured"));
                 defaults.push(true); // pre-checked: the user just configured it
             }
-            if filtered.is_empty() && manual.is_empty() {
+            if filtered.is_empty() && configured.is_empty() && manual.is_empty() {
                 ui.info("No healthy providers available to configure.");
             }
             items.push(Self::CONFIGURE_DIFFERENT_PROVIDER_LABEL.to_string());
@@ -1827,13 +1842,20 @@ impl SetupCommands {
                 .map(|&i| {
                     if i < filtered.len() {
                         filtered[i].0.clone()
+                    } else if i < filtered.len() + configured.len() {
+                        configured[i - filtered.len()].clone()
                     } else {
-                        manual[i - filtered.len()].clone()
+                        manual[i - filtered.len() - configured.len()].clone()
                     }
                 })
                 .collect();
 
             if !chose_different {
+                // Every selected model needs a provider to run on.
+                if result.is_empty() && !selected_models.is_empty() {
+                    ui.warn("Select at least one provider to run the selected models.");
+                    continue;
+                }
                 return Ok(result);
             }
 
@@ -1863,6 +1885,7 @@ impl SetupCommands {
             ProviderCommands::setup(ctx, &chosen_type, None, false).await?;
             if let Some(new_id) = changed_provider_id(&before, ctx)
                 && !manual.contains(&new_id)
+                && !configured.contains(&new_id)
                 && !filtered.iter().any(|(id, ..)| id == &new_id)
             {
                 manual.push(new_id);
@@ -4483,6 +4506,76 @@ mod tests {
         assert!(
             !defaults[0],
             "the escape-hatch item should NOT be pre-selected (user must explicitly choose it)"
+        );
+    }
+
+    fn no_discovery() -> DiscoveryResult {
+        DiscoveryResult {
+            recommendations: vec![],
+            all_model_candidates: vec![],
+            configured_provider_ids: vec![],
+            configured_model_ids: vec![],
+            configured_launcher_ids: vec![],
+            configured_capability_ids: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn select_providers_offers_configured_providers_pre_checked() {
+        let capture = Arc::new(CaptureUi::default());
+        let mut ctx = crate::AppContext::new(Config::default(), capture.clone());
+        ctx.config_mut().providers.insert(
+            "ollama".to_string(),
+            crate::config::ProviderConfig {
+                provider_id: "ollama".to_string(),
+                provider_type: "ollama".to_string(),
+                config: serde_json::json!({}),
+            },
+        );
+        capture.multi_select_answers.borrow_mut().push_back(vec![0]);
+
+        let selected = SetupCommands::select_providers(&mut ctx, &no_discovery(), &HashSet::new())
+            .await
+            .unwrap();
+
+        assert_eq!(selected, HashSet::from(["ollama".to_string()]));
+        let prompts = capture.multi_select_prompts.borrow();
+        let (_, items, defaults) = &prompts[0];
+        assert_eq!(items[0], "ollama — configured");
+        assert!(defaults[0]);
+        assert!(
+            capture.infos.borrow().is_empty(),
+            "no 'no healthy providers' notice"
+        );
+    }
+
+    #[tokio::test]
+    async fn select_providers_asks_again_when_models_are_selected_and_no_provider_is() {
+        let capture = Arc::new(CaptureUi::default());
+        let mut ctx = crate::AppContext::new(Config::default(), capture.clone());
+        ctx.config_mut().providers.insert(
+            "ollama".to_string(),
+            crate::config::ProviderConfig {
+                provider_id: "ollama".to_string(),
+                provider_type: "ollama".to_string(),
+                config: serde_json::json!({}),
+            },
+        );
+        capture
+            .multi_select_answers
+            .borrow_mut()
+            .extend([vec![], vec![0]]);
+        let models = HashSet::from(["granite-4.2-8b".to_string()]);
+
+        let selected = SetupCommands::select_providers(&mut ctx, &no_discovery(), &models)
+            .await
+            .unwrap();
+
+        assert_eq!(selected, HashSet::from(["ollama".to_string()]));
+        assert_eq!(capture.multi_select_prompts.borrow().len(), 2);
+        assert_eq!(
+            *capture.warns.borrow(),
+            vec!["Select at least one provider to run the selected models.".to_string()]
         );
     }
 
