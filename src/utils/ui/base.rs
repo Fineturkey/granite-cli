@@ -47,6 +47,13 @@ pub(crate) fn non_interactive<T>() -> anyhow::Result<T> {
     )
 }
 
+/// Whether the dialoguer prompts in the default [`Ui`] methods can run,
+/// given whether stdin and stderr are terminals. The prompts read stdin and
+/// draw on stderr, so both must be terminals.
+pub(crate) fn can_prompt(stdin_is_terminal: bool, stderr_is_terminal: bool) -> bool {
+    stdin_is_terminal && stderr_is_terminal
+}
+
 /// Generates panic-safety contract tests for any [`Ui`] implementation.
 /// Invoke with the constructor expression as argument:
 ///
@@ -176,9 +183,15 @@ pub trait Ui: Send + Sync + Any {
 
     /// Whether this session can prompt at all. False for backends whose
     /// output is meant to be read by a program rather than a person, which
-    /// have nobody to ask.
+    /// have nobody to ask. The prompts below read stdin and draw on stderr,
+    /// so by default a session can prompt only when both are terminals; in a
+    /// pipe or a script a prompt would fail with "not a terminal".
     fn is_interactive(&self) -> bool {
-        true
+        use std::io::IsTerminal;
+        can_prompt(
+            std::io::stdin().is_terminal(),
+            std::io::stderr().is_terminal(),
+        )
     }
 
     /// Ask the user to pick one of `items`, returning the chosen index.
@@ -641,6 +654,28 @@ pub(crate) mod tests {
                 "connection refused".to_string()
             )
         );
+    }
+
+    // -- can_prompt ----------------------------------------------------------
+
+    #[test]
+    fn can_prompt_when_stdin_and_stderr_are_terminals() {
+        assert!(can_prompt(true, true));
+    }
+
+    #[test]
+    fn cannot_prompt_when_stdin_is_not_a_terminal() {
+        assert!(!can_prompt(false, true));
+    }
+
+    #[test]
+    fn cannot_prompt_when_stderr_is_not_a_terminal() {
+        assert!(!can_prompt(true, false));
+    }
+
+    #[test]
+    fn cannot_prompt_when_neither_is_a_terminal() {
+        assert!(!can_prompt(false, false));
     }
 
     // -- CaptureUi input methods -------------------------------------------

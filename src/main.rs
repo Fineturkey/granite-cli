@@ -269,8 +269,9 @@ enum ModelSubcommands {
         /// How to handle other configured instances that depend on this model.
         /// `cascade` removes them too; `refuse` aborts with a non-zero exit;
         /// `leave` removes only this model and leaves dependents broken.
-        /// Omitting the flag prompts interactively, or behaves like `leave`
-        /// when there is no terminal to ask.
+        /// Omitting the flag prompts when the run can ask; otherwise, when
+        /// something depends on it, it aborts with a non-zero exit that
+        /// names the policies.
         #[arg(long, value_name = "POLICY")]
         dependents: Option<DependentsPolicy>,
     },
@@ -310,8 +311,9 @@ enum CapabilitySubcommands {
         /// How to handle other configured instances that depend on this
         /// capability. `cascade` removes them too; `refuse` aborts with a
         /// non-zero exit; `leave` removes only this capability and leaves
-        /// dependents broken. Omitting the flag prompts interactively, or
-        /// behaves like `leave` when there is no terminal to ask.
+        /// dependents broken. Omitting the flag prompts when the run can
+        /// ask; otherwise, when something depends on it, it aborts with a
+        /// non-zero exit that names the policies.
         #[arg(long, value_name = "POLICY")]
         dependents: Option<DependentsPolicy>,
     },
@@ -361,8 +363,9 @@ enum ProviderSubcommands {
         /// How to handle other configured instances that depend on this
         /// provider. `cascade` removes them too; `refuse` aborts with a
         /// non-zero exit; `leave` removes only this provider and leaves
-        /// dependents broken. Omitting the flag prompts interactively, or
-        /// behaves like `leave` when there is no terminal to ask.
+        /// dependents broken. Omitting the flag prompts when the run can
+        /// ask; otherwise, when something depends on it, it aborts with a
+        /// non-zero exit that names the policies.
         #[arg(long, value_name = "POLICY")]
         dependents: Option<DependentsPolicy>,
     },
@@ -402,8 +405,9 @@ enum LauncherSubcommands {
         /// How to handle other configured instances that depend on this
         /// launcher. `cascade` removes them too; `refuse` aborts with a
         /// non-zero exit; `leave` removes only this launcher and leaves
-        /// dependents broken. Omitting the flag prompts interactively, or
-        /// behaves like `leave` when there is no terminal to ask.
+        /// dependents broken. Omitting the flag prompts when the run can
+        /// ask; otherwise, when something depends on it, it aborts with a
+        /// non-zero exit that names the policies.
         #[arg(long, value_name = "POLICY")]
         dependents: Option<DependentsPolicy>,
     },

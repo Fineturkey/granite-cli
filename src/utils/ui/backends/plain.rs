@@ -135,4 +135,15 @@ mod tests {
     use super::*;
 
     crate::output_contract_tests!(PlainOutput::new("plain", &serde_json::json!({}),).unwrap());
+
+    #[test]
+    fn is_interactive_follows_stdin_and_stderr() {
+        use std::io::IsTerminal;
+        let out = PlainOutput::new("plain", &serde_json::json!({})).unwrap();
+        let expected = crate::utils::ui::base::can_prompt(
+            std::io::stdin().is_terminal(),
+            std::io::stderr().is_terminal(),
+        );
+        assert_eq!(out.is_interactive(), expected);
+    }
 }
