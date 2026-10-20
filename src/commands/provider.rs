@@ -159,11 +159,9 @@ impl ProviderCommands {
                     let mut instance_fields: Vec<(&str, String)> = Vec::new();
 
                     instance_fields.push(("Config: Type", cfg.provider_type.clone()));
-                    if let Some(obj) = cfg.config.as_object() {
-                        for (k, v) in obj {
-                            instance_fields.push(("Config", format!("{k} = {v}")))
-                        }
-                    }
+                    let config_fields = crate::commands::shared::config_fields(&cfg.config);
+                    instance_fields
+                        .extend(config_fields.iter().map(|(k, v)| (k.as_str(), v.clone())));
 
                     ctx.ui.detail(id, &instance_fields);
                 }
@@ -645,8 +643,38 @@ mod tests {
         assert!(
             fields2
                 .iter()
-                .any(|(k, v)| *k == "Config" && v.contains("http://localhost:11434"))
+                .any(|(k, v)| *k == "Config: base_url" && v == "http://localhost:11434")
         );
+    }
+
+    #[test]
+    fn info_in_json_keeps_every_config_value() {
+        let json = Arc::new(crate::utils::ui::backends::json::JsonOutput::with_capture());
+        let mut ctx = crate::AppContext::new(Config::default(), json.clone());
+        ctx.config_mut().providers.insert(
+            "my-provider".to_string(),
+            ProviderConfig {
+                provider_id: "my-provider".to_string(),
+                provider_type: "openai-compatible".to_string(),
+                config: serde_json::json!({
+                    "base_url": "http://localhost:11434",
+                    "timeout_secs": 10,
+                }),
+            },
+        );
+
+        ProviderCommands::info(&ctx, "my-provider").unwrap();
+
+        let records = json.captured();
+        let instance = records
+            .iter()
+            .find(|r| r["title"] == "my-provider")
+            .expect("an instance detail record");
+        assert_eq!(
+            instance["fields"]["Config: base_url"],
+            "http://localhost:11434"
+        );
+        assert_eq!(instance["fields"]["Config: timeout_secs"], "10");
     }
 
     #[test]

@@ -446,9 +446,6 @@ fn construct_context(
         alog::FormatterKind::Pretty
     };
     let ui_arc_clone = Arc::clone(&ui);
-    let ui_writer = UiWriter {
-        ui: Arc::clone(&ui),
-    };
     alog::configure(alog::Config {
         default_level: log_level.parse().unwrap(),
         filters: alog::Filters::Spec(log_filters.to_string()),
@@ -456,7 +453,9 @@ fn construct_context(
             formatter_kind,
             ui_arc_clone,
         ))),
-        writer: alog::Writer::Custom(Box::new(ui_writer)),
+        writer: alog::Writer::Custom(Box::new(LogWriter {
+            out: std::io::stderr(),
+        })),
         thread_id: log_thread_id,
     });
     alog!("MAIN", MessageLevel::Debug, "Welcome to granite-cli!");
@@ -546,26 +545,29 @@ fn completion_command() -> clap::Command {
     cmd
 }
 
-/// A log sink that routes formatted records through a [`Ui`] backend.
-struct UiWriter {
-    ui: Arc<dyn Ui>,
+/// The log sink: writes each formatted record to `out`, which is stderr
+/// outside tests, one line per record. Log lines stay off stdout, which
+/// carries the command's output in every `--output` format.
+struct LogWriter<W: Write> {
+    out: W,
 }
 
-impl Write for UiWriter {
+impl<W: Write> Write for LogWriter<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let text = std::str::from_utf8(buf).unwrap_or("");
-        // The formatter adds a trailing newline; split and route each line.
+        let text = String::from_utf8_lossy(buf);
+        // UiFormatter trims the record's trailing newline; put one back after
+        // each line.
         for line in text.split('\n') {
             if line.is_empty() {
                 continue;
             }
-            self.ui.info(line);
+            writeln!(self.out, "{line}")?;
         }
         Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+        self.out.flush()
     }
 }
 
@@ -1163,6 +1165,24 @@ fn bob_hook_capture_should_write(ancestor_lock: Option<&std::path::Path>) -> boo
         }
     } else {
         true // no lock → always write
+    }
+}
+
+#[cfg(test)]
+mod log_writer_tests {
+    use super::*;
+
+    #[test]
+    fn each_record_is_written_as_its_own_line() {
+        let mut writer = LogWriter { out: Vec::new() };
+
+        writer.write_all(b"[CONF :WARN] first").unwrap();
+        writer.write_all(b"[CONF :WARN] second\n").unwrap();
+
+        assert_eq!(
+            String::from_utf8(writer.out).unwrap(),
+            "[CONF :WARN] first\n[CONF :WARN] second\n"
+        );
     }
 }
 
