@@ -13,6 +13,7 @@ pub static LAUNCHER_REGISTRY: LazyLock<base::LauncherFactory> = LazyLock::new(||
     let mut factory = base::LauncherFactory::new();
     factory.register::<claude::ClaudeLauncher>("claude");
     factory.register::<bob::BobLauncher>("bob");
+    factory.register::<bobide::BobIdeLauncher>("bobide");
     factory.register::<pi::PiLauncher>("pi");
     factory.register::<opencode::OpenCodeLauncher>("opencode");
     factory.register::<hermes::HermesLauncher>("hermes");
@@ -109,6 +110,7 @@ impl crate::dependency::Configured<dyn Launcher> for LauncherSource {
 
 mod base;
 pub mod bob;
+pub mod bobide;
 pub mod claude;
 pub mod goose;
 pub mod hermes;
@@ -119,6 +121,7 @@ pub mod pi;
 pub(crate) use base::resolve_and_bind;
 pub use base::{EnvBinding, LaunchContext, Launcher, LauncherMetadata};
 pub use bob::{BobLauncher, BobLauncherConfig};
+pub use bobide::{BobIdeLauncher, BobIdeLauncherConfig};
 pub use claude::{ClaudeLauncher, ClaudeLauncherConfig};
 pub use goose::{GooseLauncher, GooseLauncherConfig};
 pub use hermes::{HermesLauncher, HermesLauncherConfig};
@@ -157,6 +160,7 @@ mod tests {
         assert!(LAUNCHER_REGISTRY.get("bob").is_some());
         assert!(LAUNCHER_REGISTRY.get("pi").is_some());
         assert!(LAUNCHER_REGISTRY.get("opencode").is_some());
+        assert!(LAUNCHER_REGISTRY.get("bobide").is_some());
         assert!(LAUNCHER_REGISTRY.get("hermes").is_some());
         assert!(LAUNCHER_REGISTRY.get("goose").is_some());
         assert!(LAUNCHER_REGISTRY.get("openclaw").is_some());
@@ -202,6 +206,7 @@ mod tests {
         let catalog = source.catalog();
         assert!(catalog.contains_key("claude"));
         assert!(catalog.contains_key("bob"));
+        assert!(catalog.contains_key("bobide"));
         assert!(catalog.contains_key("pi"));
         assert!(catalog.contains_key("opencode"));
         assert!(catalog.contains_key("hermes"));
@@ -215,6 +220,7 @@ mod tests {
         let source = LauncherSource::from_config(&config);
         assert!(source.config_schema("claude").is_some());
         assert!(source.config_schema("bob").is_some());
+        assert!(source.config_schema("bobide").is_some());
         assert!(source.config_schema("pi").is_some());
         assert!(source.config_schema("opencode").is_some());
         assert!(source.config_schema("hermes").is_some());

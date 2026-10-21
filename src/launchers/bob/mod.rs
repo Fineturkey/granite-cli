@@ -23,9 +23,9 @@ use crate::utils::resolve_shell_command;
 use crate::utils::subserver::SubServer;
 use crate::utils::ui::Ui;
 
-mod delegate;
+pub(crate) mod delegate;
 pub(crate) mod hook;
-mod usage;
+pub(crate) mod usage;
 
 use_channel!("BOB");
 
