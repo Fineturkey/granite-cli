@@ -230,8 +230,6 @@ impl Launcher for BobIdeLauncher {
                 ui,
             )
             .await?;
-            // Disable internal sub-agents if providing them via MCP
-            args.push("--disable-subagents".to_string());
             all_mcp_bindings.push(("bob-sub-agents".to_string(), binding));
             delegate_server = Some(server);
         }
