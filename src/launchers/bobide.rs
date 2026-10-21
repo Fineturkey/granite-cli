@@ -197,9 +197,9 @@ impl Launcher for BobIdeLauncher {
         Ok(vec![])
     }
 
-    /// Registers each bound MCP server with `bobide --add-mcp '<json>'` (scoped to
-    /// this workspace) before exec'ing, and no removal (bobide has no documented
-    /// remove CLI).
+    /// Writes each bound MCP server directly into `<workspace>/.bob/mcp.json`
+    /// (overwriting-merge into the existing `mcpServers` object) before
+    /// exec'ing, and removes them again once the IDE window closes.
     ///
     /// When `ctx.usage_tracker` is `Some`, also registers a Bob `SessionStart`
     /// lifecycle hook to capture the task ID, polls Bob's SQLite DB for usage
@@ -248,9 +248,7 @@ impl Launcher for BobIdeLauncher {
             delegate_server = Some(server);
         }
 
-        for (name, binding) in &all_mcp_bindings {
-            register_mcp_server_ide(&binary, name, binding, ctx, ui)?;
-        }
+        write_mcp_servers_to_config(&all_mcp_bindings, ctx, ui)?;
 
         // bobide does not inherit the CWD as the opened workspace; pass it
         // explicitly so the IDE opens with the correct project folder.
@@ -330,7 +328,7 @@ impl Launcher for BobIdeLauncher {
             .await
         };
 
-        // No MCP removal for bobide (no remove CLI available)
+        remove_mcp_servers_from_config(&all_mcp_bindings, ctx, ui);
 
         if let Some(server) = delegate_server {
             server.shutdown().await;
@@ -528,54 +526,134 @@ pub(crate) fn resolve_bobide_command(command_path: &Option<String>) -> anyhow::R
     anyhow::bail!("'bobide' not found on PATH and no platform-specific install location was found")
 }
 
-/// Runs `<binary> --add-mcp <json>` where `<json>` is a merged object of the
-/// server's canonical MCP JSON plus `{"name": "<name>"}`, matching the shape
-/// bobide's `--add-mcp` flag expects.
+/// Writes all bound MCP servers into `<workspace>/.bob/mcp.json` as an
+/// overwriting merge into the existing `mcpServers` object.  Our entries
+/// overwrite any stale same-named entries from a previous launch.
 ///
-/// Unlike the `bob` launcher's `mcp add-json`, there is no corresponding
-/// remove command: bobide does not expose one via its CLI.
-fn register_mcp_server_ide(
-    binary: &std::path::Path,
-    name: &str,
-    binding: &crate::capabilities::McpBinding,
+/// The file is expected to be `{ "mcpServers": { ... } }`.  If it does not
+/// exist yet it is created from scratch.  If it does exist but has no
+/// `mcpServers` key the key is added.  Keys not named by `bindings` are left
+/// unchanged (other servers the user configured manually are preserved).
+fn write_mcp_servers_to_config(
+    bindings: &[(String, crate::capabilities::McpBinding)],
     ctx: &crate::launchers::base::LaunchContext,
     ui: &dyn crate::utils::ui::Ui,
 ) -> anyhow::Result<()> {
-    let mut json_map = binding
-        .to_canonical_json()
-        .as_object()
-        .cloned()
-        .unwrap_or_default();
-    json_map.insert("name".to_string(), serde_json::json!(name));
-    let json = serde_json::Value::Object(json_map).to_string();
-    let args = vec!["--add-mcp".to_string(), json];
-
-    if ctx.dry_run {
-        ui.info(&format!(
-            "Would run: {} {}",
-            binary.display(),
-            args.join(" ")
-        ));
+    if bindings.is_empty() {
         return Ok(());
     }
-    let status = std::process::Command::new(binary)
-        .args(&args)
-        .status()
-        .with_context(|| {
-            format!(
-                "failed to register MCP server via `{} {}`",
-                binary.display(),
-                args.join(" ")
-            )
-        })?;
-    anyhow::ensure!(
-        status.success(),
-        "`{} {}` exited with status {}",
-        binary.display(),
-        args.join(" "),
-        status
-    );
-    Ok(())
+
+    let mcp_json_path = ctx.working_dir.join(WORKSPACE_CONFIG_DIR).join("mcp.json");
+
+    if ctx.dry_run {
+        for (name, binding) in bindings {
+            ui.info(&format!(
+                "Would write MCP server '{}' into {}",
+                name,
+                mcp_json_path.display()
+            ));
+            alog_channel!(
+                MessageLevel::Debug2,
+                "Would write MCP '{}': {}",
+                name,
+                binding.to_canonical_json()
+            );
+        }
+        return Ok(());
+    }
+
+    let mut root: serde_json::Value = if mcp_json_path.exists() {
+        let raw = std::fs::read_to_string(&mcp_json_path)
+            .with_context(|| format!("failed to read {}", mcp_json_path.display()))?;
+        serde_json::from_str(&raw).unwrap_or(serde_json::json!({ "mcpServers": {} }))
+    } else {
+        serde_json::json!({ "mcpServers": {} })
+    };
+
+    let servers = root
+        .as_object_mut()
+        .context("mcp.json root is not an object")?
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::json!({}));
+
+    let servers_map = servers
+        .as_object_mut()
+        .context("mcp.json mcpServers is not an object")?;
+
+    for (name, binding) in bindings {
+        alog_channel!(
+            MessageLevel::Debug2,
+            "Writing MCP server '{}' into {}",
+            name,
+            mcp_json_path.display()
+        );
+        servers_map.insert(name.clone(), binding.to_canonical_json());
+    }
+
+    let json = serde_json::to_string_pretty(&root).context("failed to serialize mcp.json")?;
+    std::fs::write(&mcp_json_path, json)
+        .with_context(|| format!("failed to write {}", mcp_json_path.display()))
+}
+
+/// Removes the entries we wrote in [`write_mcp_servers_to_config`] from
+/// `<workspace>/.bob/mcp.json`.  Best-effort: a failure is logged but does not
+/// propagate, since by this point the launch has already succeeded or failed
+/// on its own terms.
+fn remove_mcp_servers_from_config(
+    bindings: &[(String, crate::capabilities::McpBinding)],
+    ctx: &crate::launchers::base::LaunchContext,
+    ui: &dyn crate::utils::ui::Ui,
+) {
+    if bindings.is_empty() {
+        return;
+    }
+
+    let mcp_json_path = ctx.working_dir.join(WORKSPACE_CONFIG_DIR).join("mcp.json");
+
+    if ctx.dry_run {
+        for (name, _) in bindings {
+            ui.info(&format!(
+                "Would remove MCP server '{}' from {}",
+                name,
+                mcp_json_path.display()
+            ));
+        }
+        return;
+    }
+
+    let result = (|| -> anyhow::Result<()> {
+        if !mcp_json_path.exists() {
+            return Ok(());
+        }
+        let raw = std::fs::read_to_string(&mcp_json_path)
+            .with_context(|| format!("failed to read {}", mcp_json_path.display()))?;
+        let mut root: serde_json::Value = match serde_json::from_str(&raw) {
+            Ok(v) => v,
+            Err(_) => return Ok(()),
+        };
+        if let Some(servers) = root
+            .as_object_mut()
+            .and_then(|o| o.get_mut("mcpServers"))
+            .and_then(|s| s.as_object_mut())
+        {
+            for (name, _) in bindings {
+                alog_channel!(
+                    MessageLevel::Debug2,
+                    "Removing MCP server '{}' from {}",
+                    name,
+                    mcp_json_path.display()
+                );
+                servers.remove(name.as_str());
+            }
+        }
+        let json = serde_json::to_string_pretty(&root).context("failed to serialize mcp.json")?;
+        std::fs::write(&mcp_json_path, json)
+            .with_context(|| format!("failed to write {}", mcp_json_path.display()))
+    })();
+
+    if let Err(e) = result {
+        ui.warn(&format!("Failed to remove MCP servers from mcp.json: {e}"));
+    }
 }
 
 /*-- tests --*/
@@ -975,5 +1053,197 @@ mod tests {
             .and_then(|p| p.as_object())
             .unwrap();
         assert!(props.contains_key("status_poll_interval_secs"));
+    }
+
+    // -- write_mcp_servers_to_config / remove_mcp_servers_from_config ----------
+
+    fn http_binding(url: &str) -> McpBinding {
+        McpBinding::Http {
+            url: url.to_string(),
+            headers: Default::default(),
+            timeout: None,
+        }
+    }
+
+    #[test]
+    fn write_mcp_servers_creates_file_when_absent() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bob_dir = tmp.path().join(WORKSPACE_CONFIG_DIR);
+        std::fs::create_dir_all(&bob_dir).unwrap();
+        let ctx = launch_ctx(tmp.path().to_path_buf(), false);
+
+        let bindings = vec![(
+            "my-server".to_string(),
+            http_binding("http://127.0.0.1:9/mcp"),
+        )];
+        write_mcp_servers_to_config(
+            &bindings,
+            &ctx,
+            &crate::utils::ui::backends::plain::PlainOutput {},
+        )
+        .unwrap();
+
+        let raw = std::fs::read_to_string(bob_dir.join("mcp.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            v["mcpServers"]["my-server"]["url"],
+            "http://127.0.0.1:9/mcp"
+        );
+        assert_eq!(v["mcpServers"]["my-server"]["type"], "http");
+    }
+
+    #[test]
+    fn write_mcp_servers_merges_into_existing_file_and_preserves_other_keys() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bob_dir = tmp.path().join(WORKSPACE_CONFIG_DIR);
+        std::fs::create_dir_all(&bob_dir).unwrap();
+        let mcp_json = bob_dir.join("mcp.json");
+        std::fs::write(
+            &mcp_json,
+            r#"{"mcpServers":{"pre-existing":{"type":"http","url":"http://other/mcp"}}}"#,
+        )
+        .unwrap();
+        let ctx = launch_ctx(tmp.path().to_path_buf(), false);
+
+        let bindings = vec![(
+            "new-server".to_string(),
+            http_binding("http://127.0.0.1:9/mcp"),
+        )];
+        write_mcp_servers_to_config(
+            &bindings,
+            &ctx,
+            &crate::utils::ui::backends::plain::PlainOutput {},
+        )
+        .unwrap();
+
+        let raw = std::fs::read_to_string(&mcp_json).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        // Our new entry is present
+        assert_eq!(
+            v["mcpServers"]["new-server"]["url"],
+            "http://127.0.0.1:9/mcp"
+        );
+        // The pre-existing entry is preserved
+        assert_eq!(v["mcpServers"]["pre-existing"]["url"], "http://other/mcp");
+    }
+
+    #[test]
+    fn write_mcp_servers_overwrites_stale_same_named_entry() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bob_dir = tmp.path().join(WORKSPACE_CONFIG_DIR);
+        std::fs::create_dir_all(&bob_dir).unwrap();
+        let mcp_json = bob_dir.join("mcp.json");
+        std::fs::write(
+            &mcp_json,
+            r#"{"mcpServers":{"my-server":{"type":"http","url":"http://stale/mcp"}}}"#,
+        )
+        .unwrap();
+        let ctx = launch_ctx(tmp.path().to_path_buf(), false);
+
+        let bindings = vec![(
+            "my-server".to_string(),
+            http_binding("http://127.0.0.1:9/mcp"),
+        )];
+        write_mcp_servers_to_config(
+            &bindings,
+            &ctx,
+            &crate::utils::ui::backends::plain::PlainOutput {},
+        )
+        .unwrap();
+
+        let raw = std::fs::read_to_string(&mcp_json).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            v["mcpServers"]["my-server"]["url"],
+            "http://127.0.0.1:9/mcp"
+        );
+    }
+
+    #[test]
+    fn write_mcp_servers_is_noop_for_empty_bindings() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bob_dir = tmp.path().join(WORKSPACE_CONFIG_DIR);
+        std::fs::create_dir_all(&bob_dir).unwrap();
+        let ctx = launch_ctx(tmp.path().to_path_buf(), false);
+
+        write_mcp_servers_to_config(
+            &[],
+            &ctx,
+            &crate::utils::ui::backends::plain::PlainOutput {},
+        )
+        .unwrap();
+
+        // No file should have been created
+        assert!(!bob_dir.join("mcp.json").exists());
+    }
+
+    #[test]
+    fn remove_mcp_servers_removes_our_entries_and_leaves_others() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bob_dir = tmp.path().join(WORKSPACE_CONFIG_DIR);
+        std::fs::create_dir_all(&bob_dir).unwrap();
+        let mcp_json = bob_dir.join("mcp.json");
+        std::fs::write(
+            &mcp_json,
+            r#"{"mcpServers":{"ours":{"type":"http","url":"http://a/mcp"},"theirs":{"type":"http","url":"http://b/mcp"}}}"#,
+        )
+        .unwrap();
+        let ctx = launch_ctx(tmp.path().to_path_buf(), false);
+
+        let bindings = vec![("ours".to_string(), http_binding("http://a/mcp"))];
+        remove_mcp_servers_from_config(
+            &bindings,
+            &ctx,
+            &crate::utils::ui::backends::plain::PlainOutput {},
+        );
+
+        let raw = std::fs::read_to_string(&mcp_json).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert!(v["mcpServers"].get("ours").is_none());
+        assert_eq!(v["mcpServers"]["theirs"]["url"], "http://b/mcp");
+    }
+
+    #[test]
+    fn remove_mcp_servers_is_noop_when_file_absent() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bob_dir = tmp.path().join(WORKSPACE_CONFIG_DIR);
+        std::fs::create_dir_all(&bob_dir).unwrap();
+        let ctx = launch_ctx(tmp.path().to_path_buf(), false);
+
+        // Should not panic or error even with no file
+        remove_mcp_servers_from_config(
+            &[("missing".to_string(), http_binding("http://a/mcp"))],
+            &ctx,
+            &crate::utils::ui::backends::plain::PlainOutput {},
+        );
+    }
+
+    #[test]
+    fn write_and_remove_round_trip_restores_original_content() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bob_dir = tmp.path().join(WORKSPACE_CONFIG_DIR);
+        std::fs::create_dir_all(&bob_dir).unwrap();
+        let mcp_json = bob_dir.join("mcp.json");
+        std::fs::write(&mcp_json, r#"{"mcpServers":{}}"#).unwrap();
+        let ctx = launch_ctx(tmp.path().to_path_buf(), false);
+        let ui = crate::utils::ui::backends::plain::PlainOutput {};
+
+        let bindings = vec![(
+            "ephemeral".to_string(),
+            http_binding("http://127.0.0.1:9/mcp"),
+        )];
+        write_mcp_servers_to_config(&bindings, &ctx, &ui).unwrap();
+
+        // Entry is present after write
+        let mid: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&mcp_json).unwrap()).unwrap();
+        assert!(mid["mcpServers"].get("ephemeral").is_some());
+
+        remove_mcp_servers_from_config(&bindings, &ctx, &ui);
+
+        // Entry is gone after remove
+        let end: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&mcp_json).unwrap()).unwrap();
+        assert!(end["mcpServers"].get("ephemeral").is_none());
     }
 }
