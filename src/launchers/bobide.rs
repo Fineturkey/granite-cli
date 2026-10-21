@@ -58,6 +58,12 @@ pub struct BobIdeLauncherConfig {
     /// Leave unset to use the default (5s).
     #[serde(default)]
     pub usage_poll_interval_secs: Option<u64>,
+
+    /// Seconds between `bobide --status` polls while waiting for the IDE
+    /// window to close. Default 3.
+    /// Leave unset to use the default (3s).
+    #[serde(default)]
+    pub status_poll_interval_secs: Option<u64>,
 }
 
 pub struct BobIdeLauncher {
@@ -114,6 +120,14 @@ impl BobIdeLauncher {
             .usage_poll_interval_secs
             .unwrap_or(DEFAULT_USAGE_POLL_INTERVAL_SECS)
             .max(1);
+        std::time::Duration::from_secs(secs)
+    }
+
+    /// Seconds between `bobide --status` polls while waiting for the IDE
+    /// window to close. Default 3.
+    /// Leave unset to use the default (3s).
+    pub(crate) fn status_poll_interval(&self) -> std::time::Duration {
+        let secs = self.config.status_poll_interval_secs.unwrap_or(3).max(1);
         std::time::Duration::from_secs(secs)
     }
 }
@@ -265,7 +279,14 @@ impl Launcher for BobIdeLauncher {
             let mut poll_tick = tokio::time::interval(poll_interval);
             poll_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-            let run_fut = run_command(binary.clone(), &overlay, &args, ctx, ui);
+            let run_fut = run_bobide_and_wait(
+                binary.clone(),
+                &overlay,
+                &args,
+                ctx,
+                ui,
+                self.status_poll_interval(),
+            );
             tokio::pin!(run_fut);
 
             loop {
@@ -298,7 +319,15 @@ impl Launcher for BobIdeLauncher {
             }
         } else {
             // No usage tracker (dry_run): just run the command directly.
-            run_command(binary.clone(), &overlay, &args, ctx, ui).await
+            run_bobide_and_wait(
+                binary.clone(),
+                &overlay,
+                &args,
+                ctx,
+                ui,
+                self.status_poll_interval(),
+            )
+            .await
         };
 
         // No MCP removal for bobide (no remove CLI available)
@@ -346,6 +375,107 @@ impl HasBobIdeLauncherMetadata for BobIdeLauncher {
 }
 
 /*-- private --*/
+
+/// Run `bobide --status` and return its stdout as a string.
+/// Returns `None` on spawn failure or if the process exits non-zero.
+fn bobide_status(binary: &std::path::Path) -> Option<String> {
+    std::process::Command::new(binary)
+        .arg("--status")
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+}
+
+/// Returns `true` when `--status` output indicates the workspace window
+/// for the current session is still open.
+///
+/// "Open" means the output contains `"window ["` (a bracketed-number window
+/// entry — these are real workspace windows, as opposed to background
+/// helper processes which appear as bare `window` without brackets).
+///
+/// Returns `false` when:
+/// - The IDE is not running at all (output contains the "can only be used"
+///   warning), or
+/// - No `"window ["` entry is present (all workspace windows are closed).
+fn window_still_open(status_output: &str) -> bool {
+    if status_output.contains("--status argument can only be used") {
+        return false;
+    }
+    status_output.contains("window [")
+}
+
+/// Launch bobide, wait for it to exit (it exits quickly as a GUI launcher),
+/// then poll `bobide --status` until the workspace window is closed or a
+/// shutdown signal is received.
+///
+/// Returns a synthetic success `ExitStatus` once the window is gone or the
+/// poll detects the IDE has quit, mirroring the contract `run_command`
+/// provides for normal CLI tools.
+async fn run_bobide_and_wait(
+    binary: PathBuf,
+    overlay: &[EnvBinding],
+    args: &[String],
+    ctx: &LaunchContext,
+    ui: &dyn Ui,
+    status_poll_interval: std::time::Duration,
+) -> anyhow::Result<std::process::ExitStatus> {
+    // Phase 1: spawn bobide and wait for the launcher process to exit.
+    // It exits almost immediately after handing off to the running IDE.
+    run_command(binary.clone(), overlay, args, ctx, ui).await?;
+
+    if ctx.dry_run {
+        // In dry-run mode run_command already printed what it would do;
+        // skip the status-polling phase entirely.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            return Ok(std::process::ExitStatus::from_raw(0));
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::ExitStatusExt;
+            return Ok(std::process::ExitStatus::from_raw(0));
+        }
+    }
+
+    // Phase 2: poll --status until the window is gone.
+    ui.info("bobide launched; waiting for IDE window to close...");
+
+    let mut poll = tokio::time::interval(status_poll_interval);
+    poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    loop {
+        poll.tick().await;
+        let still_open = tokio::task::spawn_blocking({
+            let binary = binary.clone();
+            move || {
+                bobide_status(&binary)
+                    .as_deref()
+                    .map(window_still_open)
+                    .unwrap_or(false)
+            }
+        })
+        .await
+        .unwrap_or(false);
+
+        if !still_open {
+            break;
+        }
+    }
+
+    ui.info("IDE window closed; tearing down session.");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        Ok(std::process::ExitStatus::from_raw(0))
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::ExitStatusExt;
+        Ok(std::process::ExitStatus::from_raw(0))
+    }
+}
 
 /// Bob stores workspace-scoped MCP config at `<workspace>/.bob/mcp.json` and
 /// expects the directory to already exist; it does not create it itself, so
@@ -783,5 +913,67 @@ mod tests {
             )
             .await;
         assert!(result.is_ok());
+    }
+
+    // -- window_still_open ----------------------------------------------
+
+    #[test]
+    fn window_still_open_returns_true_when_numbered_window_present() {
+        let status = "CPU %\tMem MB\t   PID\tProcess\n    0\t123\t 100\tbobide\n    0\t456\t 101\twindow [1] (my-project)\n";
+        assert!(window_still_open(status));
+    }
+
+    #[test]
+    fn window_still_open_returns_false_when_no_numbered_window() {
+        let status =
+            "CPU %\tMem MB\t   PID\tProcess\n    0\t123\t 100\tbobide\n    0\t456\t 101\twindow\n";
+        assert!(!window_still_open(status));
+    }
+
+    #[test]
+    fn window_still_open_returns_false_when_ide_not_running() {
+        let status = "Warning: The --status argument can only be used if IBM Bob is already running. Please run it again after IBM Bob has started.\n";
+        assert!(!window_still_open(status));
+    }
+
+    // -- status_poll_interval -------------------------------------------
+
+    #[test]
+    fn status_poll_interval_defaults_to_three_seconds() {
+        let l = BobIdeLauncher::new("my-bobide", &serde_json::json!({})).unwrap();
+        assert_eq!(l.status_poll_interval(), std::time::Duration::from_secs(3));
+    }
+
+    #[test]
+    fn status_poll_interval_uses_config_when_set() {
+        let l = BobIdeLauncher::new(
+            "my-bobide",
+            &serde_json::json!({ "status_poll_interval_secs": 10 }),
+        )
+        .unwrap();
+        assert_eq!(l.status_poll_interval(), std::time::Duration::from_secs(10));
+    }
+
+    #[test]
+    fn status_poll_interval_floors_at_one_second() {
+        let l = BobIdeLauncher::new(
+            "my-bobide",
+            &serde_json::json!({ "status_poll_interval_secs": 0 }),
+        )
+        .unwrap();
+        assert_eq!(l.status_poll_interval(), std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn config_schema_includes_status_poll_interval_secs() {
+        use crate::launchers::base::LauncherFactory;
+        let mut factory = LauncherFactory::new();
+        factory.register::<BobIdeLauncher>("bobide");
+        let schema = factory.config_schema("bobide").unwrap();
+        let props = schema
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .unwrap();
+        assert!(props.contains_key("status_poll_interval_secs"));
     }
 }
