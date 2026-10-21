@@ -980,9 +980,12 @@ mod tests {
 
     #[tokio::test]
     async fn launch_passes_working_dir_as_positional_arg() {
-        let launcher = bobide();
+        // Use `ls` as the command so validate_command succeeds on every
+        // environment (CI included), regardless of whether `bobide` is
+        // installed.
+        let launcher =
+            BobIdeLauncher::new("my-bobide", &serde_json::json!({ "command_path": "ls" })).unwrap();
         let ctx = launch_ctx(std::env::temp_dir(), true);
-        // Use `ls` so validate_command succeeds, then launch with dry_run.
         let result = launcher
             .launch(
                 &[],
