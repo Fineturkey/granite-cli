@@ -228,11 +228,11 @@ In order of how much of the design depends on them.
    not install; it shows the manual instructions (spec 0029).
 
 5. **For a local provider, a failed health check always says that the server
-   may not be running, and the program on PATH decides whether to offer an
+   is not answering, and the program on PATH decides whether to offer an
    install.** Each local provider type names the program its install puts on
    PATH. When the health check fails at a localhost endpoint and the program
-   is missing, granite-cli offers the install, and says that the server may
-   be installed elsewhere and not running. When the program is present, it
+   is missing, granite-cli offers the install, and says that the program may
+   be installed elsewhere. When the program is present, it
    shows how to start the server. A failure at any other endpoint leads to
    neither, because the server is on another machine.
 
@@ -251,8 +251,10 @@ In order of how much of the design depends on them.
 
 7. **A method applies when its operating system matches and the program it
    uses is on PATH.** The program is the package manager or downloader:
-   `brew`, `winget`, `npm`, `uv`, `curl`. Methods are listed in the order the
-   type declares, and the first one that applies is the default.
+   `brew`, `winget`, `npm`, `uv`, `curl`, plus `bash` for a command that
+   pipes to it. Methods are listed in the order the type declares. An offer
+   defaults to installing nothing, so pressing Enter never runs a command;
+   `setup --auto --install` uses the first method that applies.
 
 8. **Under WSL, granite-cli shows instructions only.** `install.sh` installs
    the Windows build of granite-cli under WSL. A tool installed on the Linux
@@ -283,7 +285,8 @@ An install method holds:
 
 - the operating systems it is for: macOS, Linux, Windows;
 - its kind and the program it needs: Homebrew (`brew`), winget, npm, uv, or a
-  vendor script (`curl` and `sh`, or PowerShell on Windows);
+  vendor script (`curl` and `sh`, plus `bash` when the command pipes to it,
+  or PowerShell on Windows);
 - other programs the command needs on PATH, such as `npm` for a vendor script
   that installs through npm;
 - the command line, run through the shell, so what is shown is what runs;
@@ -299,8 +302,7 @@ named next to it in the code.
   type        os       kind     command                                              notes
   ────        ──       ────     ───────                                              ─────
   ollama      macOS    brew     brew install ollama                                  start note: brew services start ollama
-  ollama      macOS,   script   curl -fsSL https://ollama.com/install.sh | sh        asks for input: sudo
-              Linux
+  ollama      Linux    script   curl -fsSL https://ollama.com/install.sh | sh        asks for input: sudo; dir: /usr/local/bin
   ollama      Windows  script   irm https://ollama.com/install.ps1 | iex
   llama-cpp   macOS,   brew     brew install llama.cpp                               run: llama-server
               Linux
@@ -477,8 +479,9 @@ fails.
 
 **`launcher setup <type>`** offers the install where it fails today: after
 the settings, when the binary does not resolve and `command_path` is empty or
-a bare command name. An explicit path that does not exist is a typing
-mistake, and is reported as it is today. When the install succeeds, setup
+the type's own command name. An explicit path that does not exist is a
+typing mistake, and another bare name is a command granite-cli has no
+install for; both are reported as they are today. When the install succeeds, setup
 goes on to the capability choices. When the user declines or the install
 fails, setup stops with the manual instructions.
 
@@ -514,8 +517,7 @@ $ granite-cli provider setup ollama
 ...
 Running health check...
 ⚠ Provider 'ollama' health check failed: Connection failed.
-  'ollama' was not found on PATH. If Ollama is installed elsewhere, it may
-  simply not be running.
+  'ollama' was not found on PATH. Ollama may be installed elsewhere.
 ? Install Ollama now?
   › brew install ollama
     Don't install (show manual instructions)
@@ -662,7 +664,11 @@ Auto-detecting and configuring all available components...
 `--install <type>` may be repeated, and requires `--auto`. For each named
 type, setup runs the first method that applies, before discovery. A method
 that may ask for input is tried too; without a terminal, its question fails
-and the install is reported as failed. A provider it installs is
+and the install is reported as failed. A type whose program is already on
+PATH, or that is already configured, is reported as already installed and
+not installed again, so running the same command twice installs once. A
+name that is not a provider or launcher type is rejected when the arguments
+are parsed, before anything runs. A provider it installs is
 reported as installed, with its run command, and is
 configured only if it already answers when discovery runs. A named type with
 no method that runs here is reported with its manual instructions. Setup
@@ -1082,8 +1088,8 @@ does not answer, and help with each.
 
 `provider setup` runs its health check through the install environment. When
 the check fails and the endpoint's host is localhost or a loopback address,
-setup looks for the type's program. Without it, setup warns that the server
-may be installed elsewhere and not running, and calls the install flow. With
+setup looks for the type's program. Without it, setup warns that the program
+may be installed elsewhere, and calls the install flow. With
 it, setup says where the program is. In both cases, and after a declined or
 failed install, setup then shows how to start the server and asks "Check
 again" or "Continue without it". A hosted type, or a provider on another
@@ -1161,8 +1167,10 @@ asked.
 When a kind has nothing detected or configured, `setup --auto` prints a
 warning with the command for each type that has an applicable method and the
 `--install` form. `setup` gains `--install <type>`, repeatable and requiring
-`--auto`. Each named type is installed with its first applicable method,
-before discovery. A provider installed this way is
+`--auto`, and names a registered type: any other name is rejected by the
+argument parser. Each named type whose program is not on PATH and that is
+not configured is installed with its first applicable method, before
+discovery; one that is, is reported as already installed. A provider installed this way is
 reported with its run command, and is not started. A named type that is
 unknown, has no applicable method, or fails to install is reported, setup
 continues, and the exit status is non-zero at the end. The README documents
