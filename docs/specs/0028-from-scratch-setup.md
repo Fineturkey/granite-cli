@@ -151,17 +151,15 @@ When granite-cli cannot run the install:
 8. **A GUI install.** For LM Studio, granite-cli shows the page to download
    it from and how to start its server, and runs nothing.
 9. **An installer that asks for a password.** In a terminal session the
-   installer runs in the user's terminal and asks there. In the TUI and in
-   `setup --auto`, granite-cli shows the command for the user to run.
+   installer runs in the user's terminal and asks there. Without a terminal,
+   for example `setup --auto --install` in CI, granite-cli still runs it:
+   password-less sudo works, and a password question fails, which granite-cli
+   reports with the command for the user to run.
 10. **No suitable package manager.** When no method can run here, for example
     on a Mac without Homebrew, granite-cli says which program each method
     needs and shows the manual instructions.
 
-In the TUI:
-
-11. **Install from the setup pane.** Setting up a provider or launcher from
-    the TUI makes the same offer, shows the installer's output in the pane,
-    and stops the installer on `Esc`.
+Installing from the TUI is out of scope; spec 0029 covers it.
 
 ## Proposal
 
@@ -218,14 +216,16 @@ In order of how much of the design depends on them.
    users share, so a command read from user files could be a command someone
    else wrote.
 
-4. **In a terminal session the installer runs in the user's terminal; in the
-   TUI and in `setup --auto` it runs with no input.** Vendor scripts run as
-   `curl … | sh`, and `sudo`, read their answers from the terminal, so in a
-   terminal session they can ask questions and ask for a password. The TUI
-   owns the terminal, and `setup --auto` has nobody to answer, so there the
-   installer gets no input and its output is captured. A method that needs
-   input, such as one that calls `sudo`, is marked attended, and is offered
-   only in a terminal session; elsewhere it is shown as instructions.
+4. **The installer runs in granite-cli's terminal, or with granite-cli's
+   output when there is no terminal, and every method that applies is
+   tried.** Vendor scripts run as `curl … | sh`, and `sudo`, read their
+   answers from the terminal, so in a terminal session the user answers them.
+   Without a terminal, such a question fails and the install is reported as
+   failed, with the command to run by hand; password-less `sudo`, and root in
+   a container, need no answer. A method that may ask for input is marked as
+   such, so the user knows before choosing it, but it is not skipped: whether
+   it can run is known only by trying. The TUI owns the terminal, so it does
+   not install; it shows the manual instructions (spec 0029).
 
 5. **For a local provider, a failed health check always says that the server
    may not be running, and the program on PATH decides whether to offer an
@@ -257,7 +257,7 @@ In order of how much of the design depends on them.
 8. **Under WSL, granite-cli shows instructions only.** `install.sh` installs
    the Windows build of granite-cli under WSL. A tool installed on the Linux
    side may not be found by that build, and one installed on the Windows side
-   may not be what the user wants. Open Question 2 covers lifting this.
+   may not be what the user wants. Open Question 1 covers lifting this.
 
 ### What install instructions contain
 
@@ -287,7 +287,7 @@ An install method holds:
 - other programs the command needs on PATH, such as `npm` for a vendor script
   that installs through npm;
 - the command line, run through the shell, so what is shown is what runs;
-- whether it is attended (decision 4);
+- whether it may ask for input, such as a `sudo` password (decision 4);
 - directories the method installs into that may not be on PATH yet, such as
   a vendor script's `~/.local/bin`.
 
@@ -299,7 +299,7 @@ named next to it in the code.
   type        os       kind     command                                              notes
   ────        ──       ────     ───────                                              ─────
   ollama      macOS    brew     brew install ollama                                  start note: brew services start ollama
-  ollama      macOS,   script   curl -fsSL https://ollama.com/install.sh | sh        attended: asks for sudo
+  ollama      macOS,   script   curl -fsSL https://ollama.com/install.sh | sh        asks for input: sudo
               Linux
   ollama      Windows  script   irm https://ollama.com/install.ps1 | iex
   llama-cpp   macOS,   brew     brew install llama.cpp                               run: llama-server
@@ -324,11 +324,11 @@ named next to it in the code.
   goose       macOS,   script   curl -fsSL …/download_cli.sh | CONFIGURE=false bash  dir: ~/.local/bin
               Linux
   pi          any      npm      npm install -g --ignore-scripts @earendil-works/pi-coding-agent
-  pi          macOS,   script   curl -fsSL https://pi.dev/install.sh | sh            attended: asks to start pi
+  pi          macOS,   script   curl -fsSL https://pi.dev/install.sh | sh            asks for input: whether to start pi
               Linux
   openclaw    any      npm      npm install -g openclaw@latest --allow-scripts=openclaw
   hermes      macOS,   script   curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
-              Linux                                                                  attended: runs setup, may sudo
+              Linux                                                                  asks for input: setup, sudo
   bob         macOS,   script   curl -fsSL https://bob.ibm.com/download/bobshell.sh | bash -s -- --pm npm
               Linux                                                                  needs: npm
 ```
@@ -344,9 +344,9 @@ is.
 granite-cli builds a picture of the machine when it first needs to install
 something: the operating system it was built for, whether it is running under
 WSL, and which of the programs the methods need are on PATH. A method applies
-when its operating system matches, its program is found, and, for an attended
-method, the session is a terminal session. `info` lists the methods for this
-operating system, and each one that does not apply is listed with the reason:
+when its operating system matches and its program is found. `info` lists the
+methods for this operating system, and each one that does not apply is listed
+with the reason:
 
 ```
 $ granite-cli launcher info goose
@@ -374,8 +374,8 @@ LM Studio cannot be installed from granite-cli.
 ### Asking and running
 
 An offer lists the methods that apply, each as its full command, and a line
-that installs nothing. Choosing a command is the consent to run it. An
-attended method is marked as asking for input.
+that installs nothing. Choosing a command is the consent to run it. A
+method that may ask for input, such as one that calls `sudo`, is marked.
 
 ```
 ⚠ 'opencode' not found on PATH.
@@ -389,9 +389,10 @@ granite-cli runs the chosen command through the shell (`sh -c` on macOS and
 Linux, PowerShell on Windows). There is no time limit; installs can take
 minutes.
 
-**In a terminal session** the installer inherits the terminal. Its output,
-progress bars and questions appear as they would if the user ran the command
-themselves:
+The installer inherits granite-cli's terminal and standard input. Its
+output goes to standard error, so granite-cli's own output on standard output
+stays usable in scripts. In a terminal session its output, progress bars and
+questions appear as they would if the user ran the command themselves:
 
 ```
 Running: curl -fsSL https://ollama.com/install.sh | sh
@@ -401,38 +402,31 @@ Running: curl -fsSL https://ollama.com/install.sh | sh
 ✓ Installed: /usr/local/bin/ollama
 ```
 
-**In the TUI and in `setup --auto`** the installer gets no input, and
-granite-cli prints each line of its output as it arrives, indented under the
-command:
+Without a terminal, for example `setup --auto --install` in CI, the
+installer's output goes to the same place granite-cli's does, such as the
+job's log.
+
+**Failure.** A non-zero exit status is reported under the installer's own
+output, followed by the manual instructions. Nothing is saved, and the command
+that offered the install carries on as it does today when the type is missing.
 
 ```
 Running: npm install -g opencode-ai
-  │ added 1 package in 4s
-✓ Installed: /opt/homebrew/bin/opencode
-```
-
-**Failure.** A non-zero exit status is reported, followed by the manual
-instructions. When the output was captured, the last 20 lines are repeated
-with the report. Nothing is saved, and the command that offered the install
-carries on as it does today when the type is missing.
-
-```
-Running: npm install -g opencode-ai
-  │ npm error code EACCES
-  │ npm error syscall mkdir
-  │ npm error path /usr/local/lib/node_modules/opencode-ai
+npm error code EACCES
+npm error syscall mkdir
+npm error path /usr/local/lib/node_modules/opencode-ai
 ✗ Install failed (exit status 243).
   To install OpenCode CLI yourself, see https://opencode.ai/docs/
 ```
 
 **Cancellation.** `Ctrl-C` in a terminal stops the installer and granite-cli
-together, as for any foreground process. In the TUI, `Esc` stops the
-installer and closes the pane. A captured installer runs in its own process
-group on macOS and Linux, and as a process tree on Windows, so a stop kills
-every process it started, including both sides of a `curl … | bash`
-pipeline; `Ctrl-C` during `setup --auto --install` kills that group before
-granite-cli exits. In both cases granite-cli saves nothing; files
-the installer had already written stay where they are.
+together, as for any foreground process. `SIGTERM` or `SIGHUP` sent to
+granite-cli alone stops the installer too. On macOS and Linux, when
+granite-cli has no terminal, the installer runs in its own process group, so
+`SIGINT`, `SIGTERM` or `SIGHUP` kills every process it started, including
+both sides of a `curl … | bash` pipeline, before granite-cli exits; a CI job
+timeout or `docker stop` leaves nothing running. granite-cli saves nothing;
+files the installer had already written stay where they are.
 
 **Non-interactive runs** never offer an install. A run is non-interactive
 under `setup --auto` and with an output format that cannot prompt (`json`,
@@ -666,8 +660,9 @@ Auto-detecting and configuring all available components...
 ```
 
 `--install <type>` may be repeated, and requires `--auto`. For each named
-type, setup runs the first method that applies, before discovery, with no
-input. An attended method does not apply here. A provider it installs is
+type, setup runs the first method that applies, before discovery. A method
+that may ask for input is tried too; without a terminal, its question fails
+and the install is reported as failed. A provider it installs is
 reported as installed, with its run command, and is
 configured only if it already answers when discovery runs. A named type with
 no method that runs here is reported with its manual instructions. Setup
@@ -681,12 +676,12 @@ $ granite-cli setup --auto --install ollama --install opencode
 
 Installing ollama:
 Running: brew install ollama
-  │ ...
+...
 ✓ Installed: /opt/homebrew/bin/ollama
   granite-cli does not start Ollama. Start it with `ollama serve`, then run setup again.
 Installing opencode:
 Running: npm install -g opencode-ai
-  │ added 1 package in 4s
+added 1 package in 4s
 ✓ Installed: /opt/homebrew/bin/opencode
 
 Auto-detecting and configuring all available components...
@@ -695,25 +690,11 @@ Auto-detecting and configuring all available components...
 
 ### In the TUI
 
-The TUI runs `provider setup` and `launcher setup` in its setup pane, so it
-makes the same offers, without attended methods. The installer's output goes
-into the pane's output log, and the footer shows that `Esc` stops it.
-
-```
-┌ providers — ollama ──────────────────────────────────────────────┐
-│ Running health check...                                          │
-│ ⚠ Provider 'ollama' health check failed: Connection failed.      │
-│   'ollama' was not found on PATH. If Ollama is installed         │
-│   elsewhere, it may simply not be running.                       │
-│ Running: brew install ollama                                     │
-│   │ ==> Fetching ollama                                          │
-│   │ ==> Pouring ollama--…arm64_sequoia.bottle.tar.gz             │
-│                                                                  │
-└ [↑↓/jk] Scroll output  [Esc] Stop install ───────────────────────┘
-```
-
-Today `Esc` in the pane takes effect at the next prompt. During an install
-there is no prompt, so the pane stops the installer directly.
+The TUI does not install. Its setup pane runs `provider setup` and
+`launcher setup`, which show the manual instructions when the UI cannot lend
+the terminal, so a missing type there gets the commands to run and the page.
+Installing from the pane, with the installer's output in the pane and a way
+to stop it, is spec 0029.
 
 ### Data model
 
@@ -742,7 +723,7 @@ classDiagram
     +os: macOS, Linux, Windows
     +kind: brew, winget, npm, uv, script
     +command
-    +attended
+    +attended: may ask for input
     +bin_dirs
     +needs
   }
@@ -776,34 +757,28 @@ registry without building an instance.
 
 Everything that touches the machine goes through one interface, the install
 environment: looking a program up on PATH, running a command, and running a
-provider's health check. A command runs in one of two modes: attached to the
-terminal, or captured with no input and each output line passed to the UI.
-The UI says which mode it supports. The real environment does these things.
-Tests use a fake one that answers from a table and records the commands it
-was asked to run, so no test looks at PATH, runs an install command or opens
-a connection. The platform picture is built from the environment, so a test
-can describe a Mac without Homebrew or a Linux machine with npm.
+provider's health check. A command runs attached: it inherits the terminal and
+standard input, and its output goes to standard error. The UI says whether it
+can lend the terminal; one that cannot, such as the TUI, gets the manual
+instructions instead of an offer. The real environment does these things. Tests
+use a fake one that answers from a table and records the commands it was asked
+to run, so no test looks at PATH, runs an install command or opens a
+connection. The platform picture is built from the environment, so a test can
+describe a Mac without Homebrew or a Linux machine with npm.
 
 ## Open Questions
 
-1. **`setup --auto --install` with an attended method.** Ollama's Linux
-   script calls `sudo`, so `setup --auto --install ollama` reports it as
-   manual on Linux. Should `--install` run attended methods when standard
-   input is a terminal?
-2. **WSL.** Which side should a tool be installed on when granite-cli is the
+1. **WSL.** Which side should a tool be installed on when granite-cli is the
    Windows build running under WSL, and how should the tool be found
    afterwards?
-3. **`install.sh`.** Should it gain an environment variable, such as
+2. **`install.sh`.** Should it gain an environment variable, such as
    `INSTALL=ollama,opencode`, that it passes to `setup --auto --install`?
-4. **npm global installs that need root.** On Linux, `npm install -g` fails
+3. **npm global installs that need root.** On Linux, `npm install -g` fails
    with EACCES when npm's global prefix is a system directory. Should
-   granite-cli check the prefix first and treat the method as attended?
-5. **Method order per type.** Some vendors recommend their script over a
+   granite-cli check the prefix first and say so before running the method?
+4. **Method order per type.** Some vendors recommend their script over a
    package manager (the Claude native installer over npm). The order of each
    type's methods needs a maintainer decision per type.
-6. **Marking missing tools in the TUI.** Should the Providers and Launchers
-   catalog rows show "not found on PATH" or "not answering"? This needs a detection
-   pass when the TUI opens, which it does not do today.
 
 ## Out of Scope
 
@@ -819,7 +794,8 @@ can describe a Mac without Homebrew or a Linux machine with npm.
   tools. granite-cli shows the page and stops there.
 - Checking checksums or signatures of vendor scripts. granite-cli runs the
   vendor's published command, as a user following the vendor's page would.
-- Running an attended method in the TUI.
+- Installing from the TUI, and marking missing tools in its catalogs. Spec
+  0029 covers both.
 - Pulling model weights. This stays as spec 0023 describes.
 
 ## Considered Alternatives
@@ -883,7 +859,6 @@ flowchart LR
   s6["6 provider setup"]
   s7["7 wizard install step"]
   s8["8 setup --auto"]
-  s9["9 TUI"]
   s1 --> s2
   s1 --> s3
   s1 --> s4
@@ -893,15 +868,13 @@ flowchart LR
   s4 --> s6
   s5 --> s7
   s6 --> s7
-  s5 --> s9
-  s6 --> s9
   s2 --> s8
   s3 --> s8
   s4 --> s8
 ```
 
-Sub-tasks 1 to 3 make one pull request, 4 to 6 another, 7 and 8 a third, and
-9 the last. Sub-tasks 2 and 3 can be written in parallel, as can 5 and 6.
+Sub-tasks 1 to 3 make one pull request, 4 to 6 another, and 7 and 8 a
+third. Sub-tasks 2 and 3 can be written in parallel, as can 5 and 6.
 
 ---
 
@@ -916,16 +889,16 @@ everything that touches it behind one interface.
 A new module defines install instructions and install methods as described
 in "What install instructions contain". It builds a platform picture from an
 install environment: the operating system, whether this is WSL, and which
-programs the methods need are on PATH. Given install instructions, a
-platform, and whether attended methods may run, it returns the methods that
-apply, in declared order, and for each method that does not apply the reason:
-wrong operating system, program not found, attended, or WSL.
+programs the methods need are on PATH. Given install instructions and a
+platform, it returns the methods that apply, in declared order, and for each
+method that does not apply the reason: wrong operating system, program not
+found, or WSL. A method that may ask for input is marked.
 
 The install environment is an interface with three operations: find a
 program, run a command line through the shell, and check a provider's health.
-Running takes a mode. In the attached mode the command inherits the terminal.
-In the captured mode it gets no input, each output line is passed to the UI
-as it arrives, and the last 20 lines are kept for a failure report. The UI
+A command runs attached: it inherits the terminal and standard input, and its
+output goes to standard error. Without a terminal it runs in its own process
+group on macOS and Linux, so that a signal to granite-cli stops all of it. The UI
 gains a way to say whether it can lend the terminal to a command: the
 terminal and plain backends can when standard input is a terminal, and every
 other backend cannot. The real environment does these things; a fake
@@ -935,12 +908,10 @@ run.
 Nothing calls the module yet.
 
 Tests cover: method selection on a Mac with and without Homebrew, on Linux
-with npm only, and on Windows with winget; an attended method listed with its
-reason and not selected when attended methods may not run, and selected when
-they may; every method listed as not applying under WSL; the fake environment
-recording commands and replaying scripted output; and the real environment's
-captured mode, using a command line built into the test that prints three
-lines and exits non-zero, run only through the shell the platform always has.
+with npm only, and on Windows with winget; a method that may ask for input
+selected and marked; every method listed as not applying under WSL; and the
+fake environment recording commands. The real environment runs real
+processes, so no unit test runs it.
 
 **Relevant Context**
 - `src/utils/shell.rs` (`resolve_shell_command`, PATH lookup via `which`)
@@ -1036,12 +1007,11 @@ Offer, run and follow up an install in one place that the commands can call.
 
 One function offers the install of a type: it lists the methods that apply as
 full commands with a line that installs nothing, runs the chosen one through
-the install environment, and reports failure with the manual instructions,
-and with the last 20 lines when the output was captured. Attended methods are
-offered only when the UI can lend the terminal, and the command runs attached
-exactly then. It never prompts when the UI is not interactive. A second entry
-point runs a given type's first applicable method without asking and
-captured, for `setup --auto --install`.
+the install environment, and reports failure with the manual instructions.
+It offers an install only when the UI can lend the terminal, and shows the
+manual instructions otherwise; it never prompts when the UI is not
+interactive. A second entry point runs a given type's first applicable
+method without asking, for `setup --auto --install`.
 
 After a launcher install, the flow resolves the binary on PATH and then in the
 method's directories, and returns the path found, so the caller can set
@@ -1052,10 +1022,9 @@ the install environment on each "Check again". It runs nothing else. Manual
 instructions are printed in one format everywhere.
 
 Tests cover, all with the fake environment and the test UI: declining runs
-nothing; choosing a method runs exactly that command, attached when the UI can
-lend the terminal and captured otherwise; an attended method offered only
-when the UI can lend the terminal; a failure shows the last lines and the
-manual instructions; a binary found only in a method directory is returned
+nothing; choosing a method runs exactly that command; a UI that cannot lend
+the terminal getting the manual instructions and no offer; a failure shows
+the manual instructions; a binary found only in a method directory is returned
 with the PATH warning; "Check again" until healthy; "Continue without it"
 returning unhealthy; a non-interactive UI never prompting; and a type with no
 applicable method going straight to manual instructions.
@@ -1192,8 +1161,8 @@ asked.
 When a kind has nothing detected or configured, `setup --auto` prints a
 warning with the command for each type that has an applicable method and the
 `--install` form. `setup` gains `--install <type>`, repeatable and requiring
-`--auto`. Each named type is installed with its first applicable method that
-is not attended, captured, before discovery. A provider installed this way is
+`--auto`. Each named type is installed with its first applicable method,
+before discovery. A provider installed this way is
 reported with its run command, and is not started. A named type that is
 unknown, has no applicable method, or fails to install is reported, setup
 continues, and the exit status is non-zero at the end. The README documents
@@ -1213,30 +1182,3 @@ without `--auto` rejected by the argument parser.
 
 **Status** — `[ ]` not started
 
----
-
-### Sub-Task 9 — Installs in the TUI setup pane
-
-**Intent**
-Show installer output in the setup pane, and let `Esc` stop the installer.
-
-**Expected Outcomes**
-
-The TUI cannot lend the terminal, so installs from the pane run captured and
-attended methods are shown as instructions. Installer output lines appear in
-the pane's output log as they arrive. While an installer runs, the footer
-reads "[Esc] Stop install", and `Esc` stops the installer process and closes
-the pane, with nothing saved. The rest of the offer uses the prompts the pane
-already supports.
-
-Tests cover: output lines from a fake installer reaching the pane; the footer
-hint while an installer runs; and `Esc` reaching the install environment as a
-stop request.
-
-**Relevant Context**
-- `src/utils/ui/app.rs` (`spawn_setup`; the logger silenced while the TUI
-  owns the terminal in `run_interactive_tui`)
-- `src/utils/ui/setup_pane.rs:196` (`Esc` acts at the next prompt)
-- `src/utils/ui/tui_ui.rs` (`OutputLine`)
-
-**Status** — `[ ]` not started
