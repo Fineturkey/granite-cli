@@ -22,13 +22,18 @@ pub(crate) const STDIO_HTTP_AND_SSE: &[McpTransportKind] = &[
     McpTransportKind::Sse,
 ];
 
+/// The set form of a transport list, as stored in `LauncherMetadata`.
+pub(crate) fn transport_set(transports: &[McpTransportKind]) -> HashSet<McpTransportKind> {
+    transports.iter().copied().collect()
+}
+
 /// Request built by launchers to bind MCP servers: `transports` is exactly
-/// what that launcher can register with its downstream tool, so a capability
-/// holding a server it cannot register fails with a clear error instead of
-/// being mis-registered.
-pub(crate) fn mcp_binding_request(transports: &[McpTransportKind]) -> BindingRequest {
+/// what that launcher can register with its downstream tool (its metadata's
+/// `mcp_transports`), so a capability holding a server it cannot register
+/// fails with a clear error instead of being mis-registered.
+pub(crate) fn mcp_binding_request(transports: &HashSet<McpTransportKind>) -> BindingRequest {
     BindingRequest::Mcp(McpBindingRequest {
-        supported_transports: transports.iter().copied().collect::<HashSet<_>>(),
+        supported_transports: transports.clone(),
     })
 }
 
@@ -113,7 +118,7 @@ mod tests {
     use super::*;
 
     fn offered(transports: &[McpTransportKind]) -> HashSet<McpTransportKind> {
-        match mcp_binding_request(transports) {
+        match mcp_binding_request(&transport_set(transports)) {
             BindingRequest::Mcp(request) => request.supported_transports,
             other => panic!("expected an Mcp request, got {other:?}"),
         }

@@ -14,7 +14,7 @@ use crate::capabilities::{
 use crate::launchers::base::HasLauncherMetadata as HasClaudeLauncherMetadata;
 use crate::launchers::base::{EnvBinding, LaunchContext, Launcher, LauncherMetadata, run_command};
 use crate::launchers::shared::mcp_cli::{
-    STDIO_HTTP_AND_SSE, mcp_binding_request, register_mcp_server, remove_mcp_server,
+    STDIO_HTTP_AND_SSE, mcp_binding_request, register_mcp_server, remove_mcp_server, transport_set,
 };
 use crate::registry::{ConfigConstructable, ConstructError};
 use crate::utils::resolve_shell_command;
@@ -94,7 +94,7 @@ impl Launcher for ClaudeLauncher {
 
         if capability_types.contains(&BindingType::Mcp) {
             let binding = capability
-                .bind(mcp_binding_request(STDIO_HTTP_AND_SSE))
+                .bind(mcp_binding_request(&Self::metadata().mcp_transports))
                 .await?;
             match binding {
                 Binding::Mcp(binding) => {
@@ -430,6 +430,7 @@ impl HasClaudeLauncherMetadata for ClaudeLauncher {
                 BindingType::Mcp,
                 BindingType::SubAgent,
             ]),
+            mcp_transports: transport_set(STDIO_HTTP_AND_SSE),
             tags: vec!["claude".to_string(), "anthropic".to_string()],
         }
     }
