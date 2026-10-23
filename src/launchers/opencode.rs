@@ -1583,6 +1583,7 @@ mod tests {
             url: "http://127.0.0.1:9999".to_string(),
             headers: Default::default(),
             timeout: None,
+            oauth: None,
         };
         let config = generate_config(
             None,

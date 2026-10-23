@@ -860,6 +860,7 @@ mod tests {
                 url: "http://127.0.0.1:1/mcp".to_string(),
                 headers: Default::default(),
                 timeout: None,
+                oauth: None,
             }))
         }
     }
@@ -1065,6 +1066,7 @@ mod tests {
             url: url.to_string(),
             headers: Default::default(),
             timeout: None,
+            oauth: None,
         }
     }
 

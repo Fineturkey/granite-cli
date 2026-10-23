@@ -1015,6 +1015,7 @@ mod tests {
                     "Bearer x".to_string(),
                 )]),
                 timeout: None,
+                oauth: None,
             },
         ));
         let config = l.generate_config().unwrap();

@@ -228,6 +228,7 @@ impl crate::capabilities::ResolvedCapability for ResolvedVisionMCPCapability {
             url,
             headers: HashMap::new(),
             timeout: None,
+            oauth: None,
         }))
     }
 
