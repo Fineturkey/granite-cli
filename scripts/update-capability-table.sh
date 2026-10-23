@@ -44,6 +44,9 @@ extract_id() {
 # Usage:
 #   map_set  <keys_var> <vals_var> <key> <value>
 #   map_get  <keys_var> <vals_var> <key>   # prints value or empty string
+#
+# Values are passed to `eval` by reference (`$_val`), never spliced into the
+# eval string, so quotes, `$` and backticks in a description are safe.
 # ---------------------------------------------------------------------------
 map_set() {
     local _keys_var="$1" _vals_var="$2" _key="$3" _val="$4"
@@ -53,13 +56,13 @@ map_set() {
     for (( _i=0; _i<_len; _i++ )); do
         eval "local _k=\"\${${_keys_var}[${_i}]}\""
         if [[ "$_k" == "$_key" ]]; then
-            eval "${_vals_var}[${_i}]=\"\${_val}\""
+            eval "${_vals_var}[${_i}]=\$_val"
             return
         fi
     done
     # New entry
-    eval "${_keys_var}+=(\"${_key}\")"
-    eval "${_vals_var}+=(\"${_val}\")"
+    eval "${_keys_var}+=(\"\$_key\")"
+    eval "${_vals_var}+=(\"\$_val\")"
 }
 
 map_get() {
@@ -78,97 +81,162 @@ map_get() {
 }
 
 # ---------------------------------------------------------------------------
-# Static lookup functions (replaces declare -A with fixed keys)
+# Source discovery: nothing below knows about any particular launcher or
+# capability. Everything is read from the code the registry points at.
 # ---------------------------------------------------------------------------
 
-# Returns the source file path for a capability id, or empty string.
-cap_src_file() {
-    case "$1" in
-        agent-model)       printf '%s' "${CAPABILITIES_DIR}/agent_model.rs" ;;
-        vision-mcp)        printf '%s' "${CAPABILITIES_DIR}/vision_mcp/mod.rs" ;;
-        sub-agent)         printf '%s' "${CAPABILITIES_DIR}/sub_agent.rs" ;;
-        sub-agent-code)    printf '%s' "${CAPABILITIES_DIR}/sub_agent_code.rs" ;;
-        sub-agent-explore) printf '%s' "${CAPABILITIES_DIR}/sub_agent_explore.rs" ;;
-        sub-agent-plan)    printf '%s' "${CAPABILITIES_DIR}/sub_agent_plan.rs" ;;
-        *)                 printf '%s' '' ;;
-    esac
+# The module a `factory.register::<module::Type>("id")` line names.
+#   factory.register::<speech_to_text::SpeechToTextCapability>("x")  =>  speech_to_text
+extract_module() {
+    echo "$1" | sed -n 's/.*register::<\([A-Za-z0-9_]*\)::.*/\1/p'
 }
 
-# Returns the display name for a capability id, or the id itself as fallback.
-cap_display_name_map() {
-    case "$1" in
-        agent-model)       printf '%s' "Agent Model Binding" ;;
-        vision-mcp)        printf '%s' "Vision MCP Server" ;;
-        sub-agent)         printf '%s' "Sub-Agent" ;;
-        sub-agent-code)    printf '%s' "Code Sub-Agent" ;;
-        sub-agent-explore) printf '%s' "Explore Sub-Agent" ;;
-        sub-agent-plan)    printf '%s' "Plan Sub-Agent" ;;
-        *)                 printf '%s' "$1" ;;
-    esac
+# The source file for a module under <dir>: <dir>/<module>.rs or <dir>/<module>/mod.rs.
+# Prints nothing when neither exists.
+module_src_file() {
+    local dir="$1" module="$2"
+    if [[ -f "${dir}/${module}.rs" ]]; then
+        printf '%s' "${dir}/${module}.rs"
+    elif [[ -f "${dir}/${module}/mod.rs" ]]; then
+        printf '%s' "${dir}/${module}/mod.rs"
+    fi
 }
 
-# Returns a description override for a capability id, or empty string.
-# Description overrides for capabilities whose source has macro definitions
-# that confuse the awk extractor (e.g. declare_sub_agent_full! in sub_agent.rs
-# contains template lines like `description: $description_cap.to_string()`).
-cap_description_override() {
-    case "$1" in
-        sub-agent) printf '%s' "Defines a named sub-agent (prompt, tool allow-list, and model) that a launched coding agent can delegate to." ;;
-        *)         printf '%s' '' ;;
-    esac
+# Prints the `BindingType` variants named by a `supported_*:` field, in
+# source order, space separated. Handles a one-line `HashSet::from([..])`
+# as well as one spread over several lines.
+#   $1 file   $2 field name (supported_capabilities | supported_binding_types)
+#   $3 optional: a `macro_rules!` name -- read only that macro's body
+#      (otherwise read from the `fn metadata() -> ...` that follows)
+binding_types_in() {
+    awk -v field="$2" -v macro="${3:-}" '
+        macro != "" && $0 ~ ("macro_rules! " macro "([^A-Za-z0-9_]|$)") { active = 1; next }
+        macro != "" && /macro_rules!/ { active = 0 }
+        macro == "" && /fn metadata\(\) -> / && !/-> \$/ { active = 1 }
+        active && index($0, field ":") { collecting = 1 }
+        collecting {
+            line = $0
+            while (match(line, /BindingType::[A-Za-z0-9_]+/)) {
+                tok = substr(line, RSTART + 13, RLENGTH - 13)
+                printf "%s%s", (n++ ? " " : ""), tok
+                line = substr(line, RSTART + RLENGTH)
+            }
+            if ($0 ~ /\]/) { exit }
+        }
+    ' "$1"
+}
+
+# Prints the capability `name` or `description` declared in a source file,
+# reading (in order of preference) a `declare_sub_agent_*!(..)` call, then
+# `fn metadata()`. A value may be a string literal or the name of a
+# `const X: &str = "..";` in the same file.
+#   $1 file   $2 field (name | description)
+metadata_field_in() {
+    awk -v field="$2" '
+        # Pass 1: collect `const NAME: &str = "..."` (value may be on the next line).
+        FNR == NR {
+            if (pending != "" && match($0, /"[^"]*"/)) {
+                consts[pending] = substr($0, RSTART + 1, RLENGTH - 2); pending = ""
+            } else if (match($0, /^(pub(\([a-z]+\))? )?const [A-Za-z0-9_]+: &str =/)) {
+                head = substr($0, RSTART, RLENGTH)
+                sub(/^(pub(\([a-z]+\))? )?const /, "", head); sub(/:.*/, "", head)
+                if (match($0, /"[^"]*"/)) consts[head] = substr($0, RSTART + 1, RLENGTH - 2)
+                else pending = head
+            }
+            next
+        }
+        # The value on a `key: ...` line: a literal, else a const name.
+        function value_of(s,   id) {
+            if (match(s, /"[^"]*"/)) return substr(s, RSTART + 1, RLENGTH - 2)
+            sub(/^[^:]*:[[:space:]]*/, "", s)
+            if (match(s, /^[A-Za-z_][A-Za-z0-9_]*/)) {
+                id = substr(s, RSTART, RLENGTH)
+                if (id in consts) return consts[id]
+            }
+            return ""
+        }
+        # declare_sub_agent_*!( Type Config "Name"; "Description"; ...
+        /^declare_sub_agent_[a-z_]+!\(/ { inv = 1; q = 0; next }
+        inv && /^\)/ { inv = 0 }
+        inv && /^[[:space:]]*("|[A-Za-z_])/ && /;[[:space:]]*$/ {
+            q++
+            if ((field == "name" && q == 1) || (field == "description" && q == 2)) {
+                v = value_of($0); if (v != "") { print v; exit }
+            }
+        }
+        # fn metadata() -> CapabilityMetadata { name: ..., description: ..., }
+        # Macro templates (`-> $crate::..`, `name: $name_cap`) are not metadata.
+        /fn metadata\(\) -> / && !/-> \$/ { meta = 1; next }
+        meta && want {
+            v = value_of($0); if (v != "") { print v; exit }
+        }
+        meta && $0 ~ ("^[[:space:]]*" field ":[[:space:]]*[^$[:space:]]") {
+            v = value_of($0)
+            if (v != "") { print v; exit }
+            want = 1
+        }
+    ' "$1" "$1"
+}
+
+# The file defining the `macro_rules! <name>` a capability source invokes
+# (`declare_sub_agent_basic!(..)`), or nothing for a file with its own metadata.
+macro_invoked_in() {
+    sed -n 's/^\(declare_[a-z_]*\)!(.*/\1/p' "$1" | head -1
+}
+
+macro_defined_in() {
+    grep -rlE "macro_rules! $1([^A-Za-z0-9_]|$)" "$CAPABILITIES_DIR" 2>/dev/null | head -1
 }
 
 # ---------------------------------------------------------------------------
-# 1. Extract launcher ids (in registration order)
+# 1. Extract launcher ids and their modules (in registration order)
 # ---------------------------------------------------------------------------
 launcher_ids=()
+launcher_mod_keys=()
+launcher_mod_vals=()
 while IFS= read -r line; do
     id=$(extract_id "$line")
-    [[ -n "$id" && "$id" != "$line" ]] && launcher_ids+=("$id")
+    [[ -n "$id" && "$id" != "$line" ]] || continue
+    launcher_ids+=("$id")
+    map_set launcher_mod_keys launcher_mod_vals "$id" "$(extract_module "$line")"
 done < <(grep 'factory\.register' "$LAUNCHERS_MOD")
 
 # ---------------------------------------------------------------------------
-# 2. Extract capability ids (in registration order)
+# 2. Extract capability ids and their modules (in registration order)
 # ---------------------------------------------------------------------------
 capability_ids=()
+cap_mod_keys=()
+cap_mod_vals=()
 while IFS= read -r line; do
     id=$(extract_id "$line")
-    [[ -n "$id" && "$id" != "$line" ]] && capability_ids+=("$id")
+    [[ -n "$id" && "$id" != "$line" ]] || continue
+    capability_ids+=("$id")
+    map_set cap_mod_keys cap_mod_vals "$id" "$(extract_module "$line")"
 done < <(grep 'factory\.register' "$CAPABILITIES_MOD")
 
 # ---------------------------------------------------------------------------
 # 3. For each launcher, extract its supported BindingTypes
 #    Source: supported_capabilities: HashSet::from([BindingType::X, ...])
-#    Bob launcher lives in a subdirectory — handle that.
 # ---------------------------------------------------------------------------
 launcher_type_keys=()   # parallel arrays: launcher_type_keys[i] / launcher_type_vals[i]
 launcher_type_vals=()
 
 for id in "${launcher_ids[@]}"; do
-    if [[ -f "${LAUNCHERS_DIR}/${id}/mod.rs" ]]; then
-        src="${LAUNCHERS_DIR}/${id}/mod.rs"
-    elif [[ -f "${LAUNCHERS_DIR}/${id}.rs" ]]; then
-        src="${LAUNCHERS_DIR}/${id}.rs"
-    else
+    src=$(module_src_file "$LAUNCHERS_DIR" "$(map_get launcher_mod_keys launcher_mod_vals "$id")")
+    if [[ -z "$src" ]]; then
         echo "WARNING: source file not found for launcher '${id}'" >&2
         map_set launcher_type_keys launcher_type_vals "$id" ""
         continue
     fi
-
-    # Extract all BindingType::X tokens from the supported_capabilities block.
-    # Use grep -A to grab the block, then extract tokens portably.
-    types=$(grep -A5 'supported_capabilities:' "$src" \
-            | grep -o 'BindingType::[A-Za-z]*' \
-            | sed 's/BindingType:://' \
-            | tr '\n' ' ' || true)
-
-    map_set launcher_type_keys launcher_type_vals "$id" "${types% }"
+    map_set launcher_type_keys launcher_type_vals "$id" \
+        "$(binding_types_in "$src" supported_capabilities)"
 done
 
 # ---------------------------------------------------------------------------
-# 4. Capability metadata: binding type, display name, description
+# 4. Capability metadata: binding types, display name, description
+#    All read from the module the registry names -- see the helpers above.
 # ---------------------------------------------------------------------------
-cap_btype_keys=()   # parallel arrays for cap_binding_type
+cap_btype_keys=()   # parallel arrays for the binding types a capability fills
 cap_btype_vals=()
 
 cap_dname_keys=()   # parallel arrays for cap_display_name
@@ -178,8 +246,8 @@ cap_desc_keys=()    # parallel arrays for cap_description
 cap_desc_vals=()
 
 for id in "${capability_ids[@]}"; do
-    src=$(cap_src_file "$id")
-    if [[ -z "$src" || ! -f "$src" ]]; then
+    src=$(module_src_file "$CAPABILITIES_DIR" "$(map_get cap_mod_keys cap_mod_vals "$id")")
+    if [[ -z "$src" ]]; then
         echo "WARNING: source file not found for capability '${id}'" >&2
         map_set cap_btype_keys cap_btype_vals "$id" ""
         map_set cap_desc_keys  cap_desc_vals  "$id" ""
@@ -187,48 +255,68 @@ for id in "${capability_ids[@]}"; do
         continue
     fi
 
-    # First BindingType token in the file
-    btype=$(grep -o 'BindingType::[A-Za-z]*' "$src" | head -1 | sed 's/BindingType:://')
-    map_set cap_btype_keys cap_btype_vals "$id" "${btype:-}"
-    map_set cap_dname_keys cap_dname_vals "$id" "$(cap_display_name_map "$id")"
+    # A capability declared through a macro (declare_sub_agent_*!) gets its
+    # binding types from the macro's definition; one with its own
+    # `fn metadata()` states them there.
+    macro=$(macro_invoked_in "$src")
+    if [[ -n "$macro" ]]; then
+        macro_src=$(macro_defined_in "$macro")
+        btypes=$([[ -n "$macro_src" ]] && binding_types_in "$macro_src" supported_binding_types "$macro")
+    else
+        btypes=$(binding_types_in "$src" supported_binding_types)
+    fi
+    name=$(metadata_field_in "$src" name)
+    desc=$(metadata_field_in "$src" description)
 
-    # Description extraction:
-    #   - For declare_sub_agent_*! macro calls (sub_agent*.rs):
-    #     the capability description is the 2nd quoted "..."; argument.
-    #     Structure: TypeName / ConfigName / "Name"; / "Description"; / ...
-    #     So it's the second line matching /".*;$/ inside the macro block.
-    #   - For fn metadata() definitions (agent_model.rs, vision_mcp):
-    #     read from the description: field.
-    desc=$(awk '
-        /declare_sub_agent/ { in_macro=1; quoted_count=0; next }
-        in_macro && /^[[:space:]]*"[^"]*";/ {
-            quoted_count++
-            if (quoted_count == 2) {
-                s = $0
-                sub(/[^"]*"/, "", s)
-                sub(/".*$/, "", s)
-                if (length(s) > 10) { print s; exit }
-            }
-        }
-        in_macro && /^\)/ { in_macro=0 }
-        /fn metadata/ { in_meta=1 }
-        in_meta && /description:/ {
-            s = $0
-            sub(/[^"]*"/, "", s)
-            sub(/".*$/, "", s)
-            if (length(s) > 10) { print s; exit }
-        }
-        in_meta && /^\}/ { in_meta=0 }
-    ' "$src" || true)
+    [[ -n "$btypes" ]] || echo "WARNING: no supported_binding_types found for capability '${id}' (${src})" >&2
+    [[ -n "$name" ]]   || echo "WARNING: no metadata name found for capability '${id}' (${src})" >&2
+    [[ -n "$desc" ]]   || echo "WARNING: no metadata description found for capability '${id}' (${src})" >&2
 
-    # Apply override if set (takes precedence over extracted value)
-    override=$(cap_description_override "$id")
-    map_set cap_desc_keys cap_desc_vals "$id" "${override:-${desc:-}}"
+    map_set cap_btype_keys cap_btype_vals "$id" "$btypes"
+    map_set cap_dname_keys cap_dname_vals "$id" "${name:-$id}"
+    map_set cap_desc_keys  cap_desc_vals  "$id" "$desc"
 done
+
+# ---------------------------------------------------------------------------
+# 4b. Binding types, in declaration order, from the `define_bindings!` block
+# ---------------------------------------------------------------------------
+BINDINGS_SRC="${CAPABILITIES_DIR}/base.rs"
+binding_type_names=()
+while IFS= read -r name; do
+    [[ -n "$name" ]] && binding_type_names+=("$name")
+done < <(awk '
+    /^define_bindings! \{/ { in_block = 1; next }
+    in_block && /^\}/ { exit }
+    in_block && /^    [A-Za-z0-9_]+ \{/ { sub(/^    /, ""); sub(/ .*/, ""); print }
+' "$BINDINGS_SRC")
+
+# What each binding type means, as prose. A binding type with no entry here
+# is still listed (by name) so a new one is never silently left out.
+binding_type_blurb() {
+    case "$1" in
+        AgentModel)  printf '%s' "passes a model's connection details directly to the launcher" ;;
+        Mcp)         printf '%s' "exposes the capability as an MCP server the launcher can call" ;;
+        SubAgent)    printf '%s' "exposes the capability as a named sub-agent the launcher can delegate to" ;;
+        VoiceInput)  printf '%s' "passes a transcription model's connection details to the launcher's voice input mode" ;;
+        *)           printf '%s' "" ;;
+    esac
+}
 
 # ---------------------------------------------------------------------------
 # 5. Generate the replacement block
 # ---------------------------------------------------------------------------
+
+# True when the two space-separated lists of binding types share a member.
+shares_binding_type() {
+    local want have
+    for want in $1; do
+        for have in $2; do
+            [[ "$want" == "$have" ]] && return 0
+        done
+    done
+    return 1
+}
+
 generate_block() {
     echo "<!-- capability-table-start -->"
     echo ""
@@ -245,13 +333,13 @@ generate_block() {
 
     # Data rows
     for cap_id in "${capability_ids[@]}"; do
-        btype=$(map_get cap_btype_keys cap_btype_vals "$cap_id")
+        btypes=$(map_get cap_btype_keys cap_btype_vals "$cap_id")
         display=$(map_get cap_dname_keys cap_dname_vals "$cap_id")
         [[ -z "$display" ]] && display="$cap_id"
         row="| \`${cap_id}\` | ${display}"
         for l_id in "${launcher_ids[@]}"; do
             ltypes=$(map_get launcher_type_keys launcher_type_vals "$l_id")
-            if echo " ${ltypes} " | grep -qw "$btype"; then
+            if shares_binding_type "$btypes" "$ltypes"; then
                 row+=" | ✅"
             else
                 row+=" | ❌"
@@ -272,9 +360,14 @@ generate_block() {
 
     echo ""
     echo "**Binding types** used to determine compatibility:"
-    echo "- **AgentModel** — passes a model's connection details directly to the launcher"
-    echo "- **Mcp** — exposes the capability as an MCP server the launcher can call"
-    echo "- **SubAgent** — exposes the capability as a named sub-agent the launcher can delegate to"
+    for bt in "${binding_type_names[@]}"; do
+        blurb=$(binding_type_blurb "$bt")
+        if [[ -n "$blurb" ]]; then
+            echo "- **${bt}** — ${blurb}"
+        else
+            echo "- **${bt}**"
+        fi
+    done
     echo ""
     echo "<!-- capability-table-end -->"
 }

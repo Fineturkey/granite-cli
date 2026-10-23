@@ -347,14 +347,12 @@ impl App {
                 KeyCode::Up | KeyCode::Char('k') => {
                     *cursor = cursor.saturating_sub(1);
                 }
-                KeyCode::Enter | KeyCode::Char('l') => {
-                    if !instances.is_empty() {
-                        let instance_id = instances[*cursor].clone();
-                        self.mode = AppMode::LaunchConfirm {
-                            instance_id,
-                            yes: true,
-                        };
-                    }
+                KeyCode::Enter | KeyCode::Char('l') if !instances.is_empty() => {
+                    let instance_id = instances[*cursor].clone();
+                    self.mode = AppMode::LaunchConfirm {
+                        instance_id,
+                        yes: true,
+                    };
                 }
                 _ => {}
             }
@@ -401,13 +399,13 @@ impl App {
                 KeyCode::Char('q') => return AppAction::Quit,
                 KeyCode::Esc => {
                     // If a filter is active for this section, clear it instead of quitting.
-                    if let Some(i) = Self::active_search_idx(&self.section) {
-                        if !self.active_search[i].is_empty() {
-                            self.active_search[i] = String::new();
-                            self.row = 0;
-                            self.sync_table_state();
-                            return AppAction::None;
-                        }
+                    if let Some(i) = Self::active_search_idx(&self.section)
+                        && !self.active_search[i].is_empty()
+                    {
+                        self.active_search[i] = String::new();
+                        self.row = 0;
+                        self.sync_table_state();
+                        return AppAction::None;
                     }
                     return AppAction::Quit;
                 }
@@ -458,10 +456,10 @@ impl App {
                 }
                 KeyCode::Char('l') => {
                     // Launch a configured launcher instance directly from Browse mode
-                    if self.section == Section::Launchers {
-                        if let Some(id) = self.selected_id() {
-                            self.initiate_launch(&id);
-                        }
+                    if self.section == Section::Launchers
+                        && let Some(id) = self.selected_id()
+                    {
+                        self.initiate_launch(&id);
                     }
                 }
                 _ => {}
@@ -538,12 +536,11 @@ impl App {
                         return AppAction::StartSetup(self.section.clone(), id, None);
                     }
                 }
-                KeyCode::Char('l') => {
+                KeyCode::Char('l')
                     // Launch a configured launcher instance (Launchers section only)
-                    if self.section == Section::Launchers {
+                    if self.section == Section::Launchers => {
                         self.initiate_launch(id);
                     }
-                }
                 _ => {}
             },
             // InstancePick, LaunchPick, and LaunchConfirm are handled above before the clone-based match.
@@ -618,12 +615,11 @@ impl App {
         if let Ok(entries) = fs::read_dir(&dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().is_some_and(|ext| ext == "yaml") {
-                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                        if let Ok(meta) = crate::session::read_session_file(stem) {
-                            sessions.push(meta);
-                        }
-                    }
+                if path.extension().is_some_and(|ext| ext == "yaml")
+                    && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+                    && let Ok(meta) = crate::session::read_session_file(stem)
+                {
+                    sessions.push(meta);
                 }
             }
         }
@@ -2351,12 +2347,11 @@ impl App {
                 }
                 // Show [l] Launch only on Launchers section AND when the selected
                 // launcher type has configured instances
-                if self.section == Section::Launchers {
-                    if let Some(id) = self.selected_id() {
-                        if self.existing_instances(&id).is_some() {
-                            hints.push(Hint::Launch);
-                        }
-                    }
+                if self.section == Section::Launchers
+                    && let Some(id) = self.selected_id()
+                    && self.existing_instances(&id).is_some()
+                {
+                    hints.push(Hint::Launch);
                 }
                 hints.push(Hint::Quit);
                 if matches!(

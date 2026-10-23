@@ -24,6 +24,10 @@ pub enum ModelFunction {
     /// Detect harms
     Guardian,
 
+    /*-- Decision Functions --*/
+    /// Decision making / classification
+    Decision,
+
     /*-- Embedding Functions --*/
     /// Vector representation generation for text
     Embeddings,
@@ -47,11 +51,42 @@ impl std::fmt::Display for ModelFunction {
             ModelFunction::Thinking => write!(f, "Thinking"),
             ModelFunction::ImageUnderstanding => write!(f, "Image Understanding"),
             ModelFunction::Guardian => write!(f, "Guardian"),
+            ModelFunction::Decision => write!(f, "Decision"),
             ModelFunction::Embeddings => write!(f, "Embeddings"),
             ModelFunction::Transcription => write!(f, "Transcription"),
             ModelFunction::Translation => write!(f, "Translation"),
             ModelFunction::SpeakerAttribution => write!(f, "Speaker Attribution"),
             ModelFunction::KeywordBiasing => write!(f, "Keyword Biasing"),
+        }
+    }
+}
+
+/*-- ReasoningEffort Enum ----------------------------------------------------*/
+
+/// Values of the OpenAI chat-completions `reasoning_effort` parameter that a
+/// model's chat template may understand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningEffort {
+    None,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    #[serde(rename = "xhigh")]
+    XHigh,
+}
+
+impl ReasoningEffort {
+    /// The wire value sent as `reasoning_effort`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ReasoningEffort::None => "none",
+            ReasoningEffort::Minimal => "minimal",
+            ReasoningEffort::Low => "low",
+            ReasoningEffort::Medium => "medium",
+            ReasoningEffort::High => "high",
+            ReasoningEffort::XHigh => "xhigh",
         }
     }
 }
@@ -142,6 +177,12 @@ pub trait Model: crate::registry::Named + Send + Sync {
 
     /// Model functions this model supports (OR logic - any of these)
     fn supported_functions(&self) -> &[ModelFunction];
+
+    /// `reasoning_effort` values the model's chat template understands. Empty
+    /// when the model has no effort control.
+    fn supported_reasoning_efforts(&self) -> &[ReasoningEffort] {
+        &[]
+    }
 
     /// Estimate whether `variant` will run on `hardware` at its full
     /// configured context length, at a reduced context length, or not at

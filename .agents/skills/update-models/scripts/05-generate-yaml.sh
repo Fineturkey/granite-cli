@@ -97,6 +97,11 @@ EOF
   supported_functions:
 EOF
     echo "$functions" | jq -r '.[] | "    - \(.)"'
+    local efforts=$(echo "$model" | jq -c '.supported_reasoning_efforts // []')
+    if [ "$efforts" != "[]" ]; then
+        echo "  supported_reasoning_efforts:"
+        echo "$efforts" | jq -r '.[] | "    - \(.)"'
+    fi
     cat <<EOF
   variants:
 EOF

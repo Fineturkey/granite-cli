@@ -16,16 +16,16 @@ use crate::capabilities::{
 use crate::launchers::base::HasLauncherMetadata as HasBobLauncherMetadata;
 use crate::launchers::base::{EnvBinding, LaunchContext, Launcher, LauncherMetadata, run_command};
 use crate::launchers::shared::mcp_cli::{
-    mcp_binding_request, register_mcp_server, remove_mcp_server,
+    STDIO_AND_HTTP, mcp_binding_request, register_mcp_server, remove_mcp_server, transport_set,
 };
 use crate::registry::{ConfigConstructable, ConstructError};
 use crate::utils::resolve_shell_command;
 use crate::utils::subserver::SubServer;
 use crate::utils::ui::Ui;
 
-mod delegate;
+pub(crate) mod delegate;
 pub(crate) mod hook;
-mod usage;
+pub(crate) mod usage;
 
 use_channel!("BOB");
 
@@ -163,7 +163,9 @@ impl Launcher for BobLauncher {
             return Ok(());
         }
 
-        let binding = capability.bind(mcp_binding_request()).await?;
+        let binding = capability
+            .bind(mcp_binding_request(&Self::metadata().mcp_transports))
+            .await?;
         match binding {
             Binding::Mcp(binding) => {
                 self.bound_mcp_bindings
@@ -332,6 +334,7 @@ impl HasBobLauncherMetadata for BobLauncher {
             description: "IBM Bob AI assistant CLI".to_string(),
             default_command: "bob".to_string(),
             supported_capabilities: HashSet::from([BindingType::Mcp, BindingType::SubAgent]),
+            mcp_transports: transport_set(STDIO_AND_HTTP),
             tags: vec!["bob".to_string(), "ibm".to_string()],
         }
     }
@@ -608,6 +611,7 @@ mod tests {
                     verify_ssl: true,
                     context_length: Some(131072),
                     custom_headers: None,
+                    supported_reasoning_efforts: vec![],
                 },
                 known_type: None,
             }))

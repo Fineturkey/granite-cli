@@ -136,6 +136,10 @@ pub struct AgentModelBinding {
     pub context_length: Option<u64>,
     /// Custom headers to be sent with each request to the provider.
     pub custom_headers: Option<HashMap<String, Secret>>,
+    /// `reasoning_effort` values the model's chat template understands, so a
+    /// launcher can expose only the effort settings that will take effect.
+    /// Empty when the model has no effort control.
+    pub supported_reasoning_efforts: Vec<crate::models::ReasoningEffort>,
 }
 
 /// Request payload for `BindingType::SubAgent` -- which `ApiType` the
@@ -255,6 +259,33 @@ pub enum McpBinding {
     },
 }
 
+/// Request payload for `BindingType::VoiceInput` -- which `ApiType` the
+/// launcher's speech-to-text client speaks.
+#[derive(Debug, Clone)]
+pub struct VoiceInputBindingRequest {
+    pub api_type: ApiType,
+}
+
+/// Result payload for `BindingType::VoiceInput`: the connection details of a
+/// transcription model, plus the knobs a launcher's speech-to-text client
+/// commonly takes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoiceInputBinding {
+    pub api_type: ApiType,
+    pub provider_name: String,
+    pub base_url: String,
+    pub model_name: String,
+    /// Full path of the transcription endpoint (e.g. `/v1/audio/transcriptions`).
+    pub endpoint_path: String,
+    pub api_key: Option<Secret>,
+    pub verify_ssl: bool,
+    /// Language hint (e.g. `en`). `None` lets the model auto-detect.
+    pub language: Option<String>,
+    pub timeout_seconds: u64,
+    pub max_retries: u32,
+    pub custom_headers: Option<HashMap<String, Secret>>,
+}
+
 define_bindings! {
     AgentModel {
         request: AgentModelBindingRequest,
@@ -270,6 +301,11 @@ define_bindings! {
         request: SubAgentBindingRequest,
         result: SubAgentBinding,
         display: "Sub-Agent",
+    },
+    VoiceInput {
+        request: VoiceInputBindingRequest,
+        result: VoiceInputBinding,
+        display: "Voice Input",
     },
 }
 
@@ -336,6 +372,14 @@ pub trait CapabilityInfo: crate::registry::Named + Send + Sync {
 
     /// Which binding surfaces this capability instance can fill.
     fn binding_types(&self) -> HashSet<BindingType>;
+
+    /// The one wire transport this instance's MCP binding uses, for a
+    /// capability that fills `BindingType::Mcp` and whose configuration fixes
+    /// it. Lets a launcher be checked against the instance before anything is
+    /// bound. `None` means no MCP binding, or one that adapts to the request.
+    fn mcp_transport(&self) -> Option<McpTransportKind> {
+        None
+    }
 }
 
 /// A capability as constructed: it holds the names its configuration gave it
@@ -401,6 +445,11 @@ pub struct CapabilityMetadata {
     /// concrete instance may choose to support only a subset via
     /// `Capability::binding_types`.
     pub supported_binding_types: HashSet<BindingType>,
+    /// Whether the setup wizard can configure this type without the user
+    /// supplying anything specific to it (e.g. by picking a model). `false`
+    /// for types like `mcp-server` whose config is the user's own, so they
+    /// are never recommended or created by `--auto`.
+    pub auto_configurable: bool,
 }
 
 impl std::fmt::Display for CapabilityMetadata {
@@ -600,6 +649,7 @@ mod mcp_binding_tests {
             dependencies: vec![],
             tags: vec!["vision".to_string(), "mcp".to_string()],
             supported_binding_types: HashSet::new(),
+            auto_configurable: true,
         };
         let fields = meta.search_fields();
         assert!(fields.contains(&"Vision MCP"));

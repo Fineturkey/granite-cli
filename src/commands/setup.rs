@@ -383,7 +383,7 @@ impl Discover {
         let mut recommendations: Vec<Recommendation> = Vec::new();
 
         for (capability_type, metadata) in CAPABILITY_REGISTRY.entries() {
-            if configured_ids.contains(&capability_type) {
+            if configured_ids.contains(&capability_type) || !metadata.auto_configurable {
                 continue;
             }
 
@@ -1790,6 +1790,17 @@ impl SetupCommands {
         // NOTE: no early return here when filtered.is_empty() -- the escape hatch
         // below is exactly what a user needs when no providers are healthy.
 
+        // Providers configured before this run. Discovery leaves them out, but
+        // models can be assigned to them, so they are offered pre-checked.
+        let mut configured: Vec<String> = ctx
+            .config()
+            .providers
+            .keys()
+            .filter(|id| !filtered.iter().any(|(f, ..)| f == *id))
+            .cloned()
+            .collect();
+        configured.sort();
+
         let mut manual: Vec<String> = Vec::new(); // ids configured via the escape hatch this run
 
         loop {
@@ -1808,11 +1819,15 @@ impl SetupCommands {
                 })
                 .collect();
             let mut defaults = vec![false; items.len()];
+            for id in &configured {
+                items.push(format!("{id} — configured"));
+                defaults.push(true);
+            }
             for id in &manual {
                 items.push(format!("{id} — manually configured"));
                 defaults.push(true); // pre-checked: the user just configured it
             }
-            if filtered.is_empty() && manual.is_empty() {
+            if filtered.is_empty() && configured.is_empty() && manual.is_empty() {
                 ui.info("No healthy providers available to configure.");
             }
             items.push(Self::CONFIGURE_DIFFERENT_PROVIDER_LABEL.to_string());
@@ -1827,13 +1842,20 @@ impl SetupCommands {
                 .map(|&i| {
                     if i < filtered.len() {
                         filtered[i].0.clone()
+                    } else if i < filtered.len() + configured.len() {
+                        configured[i - filtered.len()].clone()
                     } else {
-                        manual[i - filtered.len()].clone()
+                        manual[i - filtered.len() - configured.len()].clone()
                     }
                 })
                 .collect();
 
             if !chose_different {
+                // Every selected model needs a provider to run on.
+                if result.is_empty() && !selected_models.is_empty() {
+                    ui.warn("Select at least one provider to run the selected models.");
+                    continue;
+                }
                 return Ok(result);
             }
 
@@ -1863,6 +1885,7 @@ impl SetupCommands {
             ProviderCommands::setup(ctx, &chosen_type, None, false).await?;
             if let Some(new_id) = changed_provider_id(&before, ctx)
                 && !manual.contains(&new_id)
+                && !configured.contains(&new_id)
                 && !filtered.iter().any(|(id, ..)| id == &new_id)
             {
                 manual.push(new_id);
@@ -2005,13 +2028,19 @@ impl SetupCommands {
         }
     }
 
+    /// One line of the model picker. `providers` are the providers already
+    /// configured before this run that can run the model's best variant. It
+    /// is empty on a first setup, whose providers are chosen after the
+    /// models, so the line names providers only when there are some.
     fn format_model_option(id: &str, size: &str, fit: ContextFit, providers: &[String]) -> String {
-        let providers_str = if providers.is_empty() {
-            "none".to_string()
+        if providers.is_empty() {
+            format!("{id} — {size} — Fit: {fit}")
         } else {
-            providers.join(", ")
-        };
-        format!("{id} — {size} — Fit: {fit} ({providers_str})")
+            format!(
+                "{id} — {size} — Fit: {fit} — runs on: {}",
+                providers.join(", ")
+            )
+        }
     }
 
     fn model_options(recs: Vec<&Recommendation>) -> Vec<(String, String, ContextFit, Vec<String>)> {
@@ -2298,9 +2327,14 @@ impl SetupCommands {
                 None => (selected_providers.iter().next().cloned(), None),
             };
             if provider_id.is_none() {
-                let err = format!("Failed to find provider for {model_id}/{chosen_variant:#?}");
-                ui.warn(&err);
-                anyhow::bail!(err);
+                let for_variant = variant
+                    .as_deref()
+                    .map(|v| format!(" (variant {v})"))
+                    .unwrap_or_default();
+                anyhow::bail!(
+                    "No provider was selected to run model '{model_id}'{for_variant}. \
+                     Run setup again and select a provider that can run it."
+                );
             }
 
             let model_config = crate::config::ModelConfig {
@@ -2655,59 +2689,29 @@ impl SetupCommands {
         let ui = &*ctx.ui;
 
         ui.info("\n=== Setup Complete ===");
-        ui.info(&format!(
-            "Providers: {}",
-            if selected_providers.is_empty() {
-                "none".to_string()
-            } else {
-                selected_providers
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            }
-        ));
-        ui.info(&format!(
-            "Models: {}",
-            if selected_models.is_empty() {
-                "none".to_string()
-            } else {
-                selected_models
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            }
-        ));
-        ui.info(&format!(
-            "Launchers: {}",
-            if selected_launchers.is_empty() {
-                "none".to_string()
-            } else {
-                selected_launchers
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            }
-        ));
-        ui.info(&format!(
-            "Capabilities: {}",
-            if selected_caps.is_empty() {
-                "none".to_string()
-            } else {
-                selected_caps.iter().cloned().collect::<Vec<_>>().join(", ")
-            }
-        ));
+        ui.info(&format!("Providers: {}", summary_list(selected_providers)));
+        ui.info(&format!("Models: {}", summary_list(selected_models)));
+        ui.info(&format!("Launchers: {}", summary_list(selected_launchers)));
+        ui.info(&format!("Capabilities: {}", summary_list(selected_caps)));
 
         ui.info("\nRun `granite-cli launcher list` to see configured launchers.");
-        if !selected_launchers.is_empty() {
-            let first_launcher = selected_launchers.iter().next().unwrap();
+        if let Some(first_launcher) = selected_launchers.iter().min() {
             ui.info(&format!(
                 "Run `granite-cli launch {first_launcher}` to launch with Granite overlay.",
             ));
         }
     }
+}
+
+/// The ids in `ids` as one line of the setup summary, sorted so that the same
+/// selection reads the same on every run, or `none` when there are none.
+fn summary_list(ids: &HashSet<String>) -> String {
+    if ids.is_empty() {
+        return "none".to_string();
+    }
+    let mut sorted: Vec<&str> = ids.iter().map(String::as_str).collect();
+    sorted.sort_unstable();
+    sorted.join(", ")
 }
 
 /*-- tests -------------------------------------------------------------------*/
@@ -3340,13 +3344,14 @@ mod tests {
 
     #[tokio::test]
     async fn select_variants_auto_selects_when_only_one_candidate_without_prompting() {
+        const MODEL_ID: &str = "granite-guardian-hap-38m";
         let capture = Arc::new(CaptureUi::default());
         let mut ctx = crate::AppContext::new(Config::default(), capture.clone());
 
-        // granite-docling-258M-mlx has exactly one (safetensors) variant;
+        // granite-guardian-hap-38m has exactly one (safetensors) variant;
         // openai-compatible's default `can_run_model` accepts any format.
         let md = MODEL_REGISTRY
-            .get("granite-docling-258M-mlx")
+            .get(MODEL_ID)
             .expect("fixture model should exist in the catalog");
         assert_eq!(
             md.variants.len(),
@@ -3355,20 +3360,14 @@ mod tests {
         );
 
         let discovery = DiscoveryResult {
-            recommendations: vec![model_recommendation(
-                "granite-docling-258M-mlx",
-                &md,
-                md.variants[0].clone(),
-            )],
+            recommendations: vec![model_recommendation(MODEL_ID, &md, md.variants[0].clone())],
             all_model_candidates: vec![],
             configured_provider_ids: vec![],
             configured_model_ids: vec![],
             configured_launcher_ids: vec![],
             configured_capability_ids: vec![],
         };
-        let selected_models: HashSet<String> = ["granite-docling-258M-mlx".to_string()]
-            .into_iter()
-            .collect();
+        let selected_models: HashSet<String> = [MODEL_ID.to_string()].into_iter().collect();
         let selected_providers: HashSet<String> =
             ["openai-compatible".to_string()].into_iter().collect();
 
@@ -3382,7 +3381,7 @@ mod tests {
         .unwrap();
 
         let picked = chosen
-            .get("granite-docling-258M-mlx")
+            .get(MODEL_ID)
             .expect("should have auto-selected the sole candidate");
         assert_eq!(picked.format, md.variants[0].format);
         assert_eq!(picked.precision, md.variants[0].precision);
@@ -4508,6 +4507,163 @@ mod tests {
             !defaults[0],
             "the escape-hatch item should NOT be pre-selected (user must explicitly choose it)"
         );
+    }
+
+    fn no_discovery() -> DiscoveryResult {
+        DiscoveryResult {
+            recommendations: vec![],
+            all_model_candidates: vec![],
+            configured_provider_ids: vec![],
+            configured_model_ids: vec![],
+            configured_launcher_ids: vec![],
+            configured_capability_ids: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn select_providers_offers_configured_providers_pre_checked() {
+        let capture = Arc::new(CaptureUi::default());
+        let mut ctx = crate::AppContext::new(Config::default(), capture.clone());
+        ctx.config_mut().providers.insert(
+            "ollama".to_string(),
+            crate::config::ProviderConfig {
+                provider_id: "ollama".to_string(),
+                provider_type: "ollama".to_string(),
+                config: serde_json::json!({}),
+            },
+        );
+        capture.multi_select_answers.borrow_mut().push_back(vec![0]);
+
+        let selected = SetupCommands::select_providers(&mut ctx, &no_discovery(), &HashSet::new())
+            .await
+            .unwrap();
+
+        assert_eq!(selected, HashSet::from(["ollama".to_string()]));
+        let prompts = capture.multi_select_prompts.borrow();
+        let (_, items, defaults) = &prompts[0];
+        assert_eq!(items[0], "ollama — configured");
+        assert!(defaults[0]);
+        assert!(
+            capture.infos.borrow().is_empty(),
+            "no 'no healthy providers' notice"
+        );
+    }
+
+    #[tokio::test]
+    async fn select_providers_asks_again_when_models_are_selected_and_no_provider_is() {
+        let capture = Arc::new(CaptureUi::default());
+        let mut ctx = crate::AppContext::new(Config::default(), capture.clone());
+        ctx.config_mut().providers.insert(
+            "ollama".to_string(),
+            crate::config::ProviderConfig {
+                provider_id: "ollama".to_string(),
+                provider_type: "ollama".to_string(),
+                config: serde_json::json!({}),
+            },
+        );
+        capture
+            .multi_select_answers
+            .borrow_mut()
+            .extend([vec![], vec![0]]);
+        let models = HashSet::from(["granite-4.2-8b".to_string()]);
+
+        let selected = SetupCommands::select_providers(&mut ctx, &no_discovery(), &models)
+            .await
+            .unwrap();
+
+        assert_eq!(selected, HashSet::from(["ollama".to_string()]));
+        assert_eq!(capture.multi_select_prompts.borrow().len(), 2);
+        assert_eq!(
+            *capture.warns.borrow(),
+            vec!["Select at least one provider to run the selected models.".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_model_option_names_providers_only_when_some_can_run_it() {
+        assert_eq!(
+            SetupCommands::format_model_option("granite-4.2-8b", "8B", ContextFit::Full, &[]),
+            "granite-4.2-8b — 8B — Fit: Full"
+        );
+        assert_eq!(
+            SetupCommands::format_model_option(
+                "granite-4.2-8b",
+                "8B",
+                ContextFit::Partial(32 * 1024),
+                &["ollama".to_string(), "lm-studio".to_string()],
+            ),
+            "granite-4.2-8b — 8B — Fit: Partial (32K) — runs on: ollama, lm-studio"
+        );
+    }
+
+    #[tokio::test]
+    async fn configure_all_names_the_model_and_variant_when_no_provider_was_selected() {
+        let _home = crate::config::TestConfigHome::new();
+        let mut ctx = test_ctx();
+        let discovery = DiscoveryResult {
+            recommendations: vec![],
+            all_model_candidates: vec![],
+            configured_provider_ids: vec![],
+            configured_model_ids: vec![],
+            configured_launcher_ids: vec![],
+            configured_capability_ids: vec![],
+        };
+        let model_id = "granite-4.2-8b".to_string();
+        let selected_models: HashSet<String> = [model_id.clone()].into_iter().collect();
+        let variant = ModelVariant {
+            format: "GGUF".to_string(),
+            precision: "Q8_0".to_string(),
+            size_gb: None,
+            url: String::new(),
+        };
+        let selected_variants: HashMap<String, ModelVariant> =
+            [(model_id.clone(), variant)].into_iter().collect();
+
+        let err = SetupCommands::configure_all(
+            &mut ctx,
+            &discovery,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &selected_models,
+            &selected_variants,
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "No provider was selected to run model 'granite-4.2-8b' (variant GGUF/Q8_0). \
+             Run setup again and select a provider that can run it."
+        );
+    }
+
+    #[test]
+    fn the_summary_lists_ids_in_sorted_order() {
+        let capture = Arc::new(CaptureUi::default());
+        let ctx = crate::AppContext::new(Config::default(), capture.clone());
+        let set = |ids: &[&str]| -> HashSet<String> { ids.iter().map(|s| s.to_string()).collect() };
+
+        SetupCommands::print_summary(
+            &ctx,
+            &set(&["vision-mcp", "agent-model", "sub-agent-explore"]),
+            &set(&["pi", "claude", "opencode", "bob"]),
+            &set(&["openrouter", "ollama"]),
+            &HashSet::new(),
+        );
+
+        let infos = capture.infos.borrow().clone();
+        for expected in [
+            "Providers: ollama, openrouter",
+            "Models: none",
+            "Launchers: bob, claude, opencode, pi",
+            "Capabilities: agent-model, sub-agent-explore, vision-mcp",
+            "Run `granite-cli launch bob` to launch with Granite overlay.",
+        ] {
+            assert!(infos.iter().any(|i| i == expected), "{expected}: {infos:?}");
+        }
     }
 
     // -- configure_all guards --------------------------------------------------

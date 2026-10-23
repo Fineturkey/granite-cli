@@ -10,7 +10,8 @@
 
 use crate::capabilities::{AgentModelBinding, BindingType, ResolvedCapability, ToolName};
 use crate::launchers::base::{
-    EnvBinding, LaunchContext, Launcher, LauncherMetadata, run_command, run_command_captured,
+    EnvBinding, LaunchContext, Launcher, LauncherMetadata, run_command,
+    run_command_captured_killable,
 };
 use crate::providers::ApiType;
 use crate::registry::{ConfigConstructable, ConstructError};
@@ -173,6 +174,7 @@ impl HasPiLauncherMetadata for PiLauncher {
             description: "Pi terminal coding agent harness".to_string(),
             default_command: "pi".to_string(),
             supported_capabilities: HashSet::from([BindingType::AgentModel]),
+            mcp_transports: HashSet::new(),
             tags: vec!["pi".to_string(), "coding-agent".to_string()],
         }
     }
@@ -280,7 +282,8 @@ impl PiLauncher {
     }
 
     /// Runs `pi` headlessly for one delegated sub-agent task and returns its
-    /// captured stdout. Requires a prior `bind_capability` call -- there is no
+    /// captured stdout. Dropping the returned future kills `pi` (see
+    /// [`run_command_captured_killable`]). Requires a prior `bind_capability` call -- there is no
     /// sensible way to pick a model on the caller's behalf, so an unbound
     /// launcher here is a bug in the caller, not a runtime condition.
     pub(crate) async fn run_delegated_task(
@@ -311,7 +314,7 @@ impl PiLauncher {
 
         let overlay = self.env_overlay(ctx).await?;
         let (status, stdout, stderr) =
-            run_command_captured(binary.to_path_buf(), &overlay, &full_args, ctx).await?;
+            run_command_captured_killable(binary.to_path_buf(), &overlay, &full_args, ctx).await?;
         if !status.success() {
             anyhow::bail!("pi exited with {status}: {stderr}");
         }
@@ -520,6 +523,7 @@ fn pi_api_name(api_type: &ApiType) -> anyhow::Result<&'static str> {
         ApiType::Ollama => anyhow::bail!(
             "Pi has no Ollama-native API client; bind an OpenAI-compatible endpoint instead"
         ),
+        ApiType::Jev => anyhow::bail!("Pi has no Jev-native API client"),
     }
 }
 
@@ -531,7 +535,7 @@ fn pi_base_url(binding: &AgentModelBinding) -> String {
     let prefix = match binding.api_type {
         ApiType::OpenAI => binding.endpoint_path.strip_suffix("/chat/completions"),
         ApiType::Anthropic => binding.endpoint_path.strip_suffix("/messages"),
-        ApiType::Ollama => None,
+        ApiType::Ollama | ApiType::Jev => None,
     }
     .unwrap_or("");
     format!("{root}{prefix}")
@@ -721,6 +725,7 @@ mod tests {
             verify_ssl: true,
             context_length: Some(131072),
             custom_headers: None,
+            supported_reasoning_efforts: vec![],
         }
     }
 
@@ -876,13 +881,24 @@ mod tests {
     }
 
     #[test]
-    fn api_name_maps_supported_dialects_and_rejects_ollama() {
+    fn api_name_maps_supported_dialects_and_rejects_unsupported() {
         assert_eq!(pi_api_name(&ApiType::OpenAI).unwrap(), "openai-completions");
         assert_eq!(
             pi_api_name(&ApiType::Anthropic).unwrap(),
             "anthropic-messages"
         );
         assert!(pi_api_name(&ApiType::Ollama).is_err());
+        assert!(pi_api_name(&ApiType::Jev).is_err());
+    }
+
+    #[test]
+    fn base_url_for_jev_endpoint_has_no_operation_prefix() {
+        let b = AgentModelBinding {
+            api_type: ApiType::Jev,
+            endpoint_path: "/v1/systemone".to_string(),
+            ..binding()
+        };
+        assert_eq!(pi_base_url(&b), "http://localhost:11434");
     }
 
     // -- env overlay -----------------------------------------------------------

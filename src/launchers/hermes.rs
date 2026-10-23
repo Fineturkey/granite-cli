@@ -2,29 +2,38 @@
 //! (<https://hermes-agent.nousresearch.com>, NousResearch's agent CLI --
 //! not the Hermes model family).
 //!
-//! `HERMES_HOME` is Hermes's "profile boundary": it fully redirects
-//! `config.yaml`, `.env`, `auth.json`, `memories/`, `skills/`, `cron/`,
-//! `sessions/`, and `logs/` all at once. Pointing it straight at an
-//! otherwise-empty generated directory (as this launcher originally did)
-//! would silently discard the user's real auth/memories/skills on every
-//! launch, so -- exactly like `pi.rs` does for `PI_CODING_AGENT_DIR` -- this
-//! launcher symlinks every other top-level entry from the user's real
-//! `$HERMES_HOME`/`~/.hermes` through into its own generated directory and
-//! only ever writes `config.yaml` itself.
+//! Hermes reads its settings from `$HERMES_HOME/config.yaml` and offers no
+//! way to point at a different config file without relocating the whole
+//! home (which holds auth, memories, skills, sessions, ...). Redirecting
+//! `HERMES_HOME` would also break wrappers that mount the real home (e.g. a
+//! `docker run` script), so instead this launcher edits the real config for
+//! the length of the session: the generated settings are merged over the
+//! user's existing `config.yaml`, the original is moved aside to a
+//! `config.yaml.bak-granite-cli[.N]` backup (plus a copy in the launcher state
+//! dir), and it is moved back when `hermes` exits. See [`ConfigSwap`].
 
-use crate::capabilities::{
-    AgentModelBinding, ApiType, Binding, BindingType, McpBinding, ResolvedCapability,
-};
-use crate::launchers::base::{EnvBinding, LaunchContext, Launcher, LauncherMetadata, run_command};
-use crate::launchers::shared::mcp_cli::mcp_binding_request;
-use crate::registry::{ConfigConstructable, ConstructError};
-use crate::utils::resolve_shell_command;
-use crate::utils::ui::Ui;
+// Standard
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
+// Third Party
+use alog::{MessageLevel, alog_channel, use_channel};
 use anyhow::Context;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+
+// Local
+use crate::capabilities::{
+    AgentModelBinding, ApiType, Binding, BindingRequest, BindingType, McpBinding,
+    ResolvedCapability, VoiceInputBinding, VoiceInputBindingRequest,
+};
+use crate::launchers::base::{EnvBinding, LaunchContext, Launcher, LauncherMetadata, run_command};
+use crate::launchers::shared::mcp_cli::{STDIO_AND_HTTP, mcp_binding_request, transport_set};
+use crate::registry::{ConfigConstructable, ConstructError};
+use crate::utils::resolve_shell_command;
+use crate::utils::ui::Ui;
+
+use_channel!("HRMES");
 
 /*-- public --*/
 
@@ -49,6 +58,8 @@ pub struct HermesLauncher {
     /// `(server_name, binding)` for every MCP-capable capability bound to
     /// this launcher, written into the generated config's `mcp_servers` block.
     bound_mcp_bindings: Vec<(String, McpBinding)>,
+    /// Speech-to-text binding, written into the generated config's `stt` block.
+    bound_voice_binding: Option<VoiceInputBinding>,
 }
 
 impl ConfigConstructable for HermesLauncher {
@@ -62,6 +73,7 @@ impl ConfigConstructable for HermesLauncher {
             config,
             bound_binding: None,
             bound_mcp_bindings: vec![],
+            bound_voice_binding: None,
         })
     }
 }
@@ -85,6 +97,11 @@ impl Launcher for HermesLauncher {
     async fn bind_capability(&mut self, capability: &dyn ResolvedCapability) -> anyhow::Result<()> {
         let supported = Self::metadata().supported_capabilities;
         let capability_types = capability.binding_types();
+        alog_channel!(
+            MessageLevel::Debug2,
+            "Binding capability types {:#?}",
+            capability_types
+        );
         if !capability_types.is_subset(&supported) {
             anyhow::bail!(
                 "capability supports {:?} which this launcher does not support",
@@ -93,13 +110,31 @@ impl Launcher for HermesLauncher {
         }
 
         if capability_types.contains(&BindingType::Mcp) {
-            let binding = capability.bind(mcp_binding_request()).await?;
+            let binding = capability
+                .bind(mcp_binding_request(&Self::metadata().mcp_transports))
+                .await?;
             match binding {
                 Binding::Mcp(binding) => {
                     self.bound_mcp_bindings
                         .push((capability.instance_id().to_string(), binding));
                 }
                 other => anyhow::bail!("expected an Mcp binding, got {:?}", other.binding_type()),
+            }
+            return Ok(());
+        }
+
+        if capability_types.contains(&BindingType::VoiceInput) {
+            let binding = capability
+                .bind(BindingRequest::VoiceInput(VoiceInputBindingRequest {
+                    api_type: ApiType::OpenAI,
+                }))
+                .await?;
+            match binding {
+                Binding::VoiceInput(binding) => self.bound_voice_binding = Some(binding),
+                other => anyhow::bail!(
+                    "expected a VoiceInput binding, got {:?}",
+                    other.binding_type()
+                ),
             }
             return Ok(());
         }
@@ -127,34 +162,39 @@ impl Launcher for HermesLauncher {
         resolve_shell_command(&self.config.command_path, "hermes")
     }
 
-    /// Redirects Hermes at the granite-cli-owned config directory and
-    /// supplies the credential the generated `config.yaml` interpolates.
-    async fn env_overlay(&self, ctx: &LaunchContext) -> anyhow::Result<Vec<EnvBinding>> {
-        if self.bound_binding.is_none() && self.bound_mcp_bindings.is_empty() {
-            return Ok(vec![]);
-        }
-        let mut overlay = vec![EnvBinding {
-            key: HERMES_HOME_ENV.to_string(),
-            value: hermes_state_dir(ctx)?.to_string_lossy().to_string(),
-        }];
-        if let Some(binding) = &self.bound_binding
-            && let Some(api_key) = binding
-                .api_key
-                .as_ref()
-                .map(|api_key| api_key.0.clone())
-                .filter(|key| !key.is_empty())
+    /// Supplies the credentials the generated `config.yaml` interpolates.
+    async fn env_overlay(&self, _ctx: &LaunchContext) -> anyhow::Result<Vec<EnvBinding>> {
+        let mut overlay = vec![];
+        if let Some(api_key) = self
+            .bound_binding
+            .as_ref()
+            .and_then(|b| b.api_key.as_ref())
+            .map(|k| k.0.clone())
+            .filter(|k| !k.is_empty())
         {
             overlay.push(EnvBinding {
                 key: API_KEY_ENV.to_string(),
                 value: api_key,
             });
         }
+        if let Some(api_key) = self
+            .bound_voice_binding
+            .as_ref()
+            .and_then(|b| b.api_key.as_ref())
+            .map(|k| k.0.clone())
+            .filter(|k| !k.is_empty())
+        {
+            overlay.push(EnvBinding {
+                key: STT_API_KEY_ENV.to_string(),
+                value: api_key,
+            });
+        }
         Ok(overlay)
     }
 
-    /// Materializes the granite-cli Hermes config directory (pass-through
-    /// symlinks plus a freshly generated `config.yaml`), then execs `hermes`
-    /// with the caller's arguments untouched.
+    /// Swaps the generated settings into the user's `config.yaml` for the
+    /// duration of the session, then execs `hermes` with the caller's
+    /// arguments untouched and puts the original config back afterwards.
     async fn launch(
         &self,
         args: &[String],
@@ -162,30 +202,38 @@ impl Launcher for HermesLauncher {
         ui: &dyn Ui,
     ) -> anyhow::Result<std::process::ExitStatus> {
         let binary = self.validate_command()?;
+        let overlay = self.env_overlay(ctx).await?;
 
-        if self.bound_binding.is_some() || !self.bound_mcp_bindings.is_empty() {
-            let config = self.generate_config()?;
-            let state_dir = hermes_state_dir(ctx)?;
-            let source_dir = hermes_source_dir()?;
-            let config_path = state_dir.join(HERMES_CONFIG_FILE);
-
-            if ctx.dry_run {
-                ui.info(&format!(
-                    "Would write Hermes config to {}:",
-                    config_path.display()
-                ));
-                ui.info(&serde_json::to_string_pretty(&config)?);
-                ui.info(&format!(
-                    "  (other Hermes state linked through from {}, which is left unmodified)",
-                    source_dir.display()
-                ));
-            } else {
-                materialize_hermes_config(&state_dir, &source_dir, &config, ui)?;
-                ui.info(&format!("Wrote Hermes config to {}", config_path.display()));
-            }
+        if !self.has_bindings() {
+            return run_command(binary, &overlay, args, ctx, ui).await;
         }
 
-        run_command(binary, &self.env_overlay(ctx).await?, args, ctx, ui).await
+        let generated = self.generate_config()?;
+        let home = hermes_home_dir()?;
+        let config_path = home.join(HERMES_CONFIG_FILE);
+
+        if ctx.dry_run {
+            ui.info(&format!(
+                "Would merge these settings over {} for the session \
+                 (the original would be backed up to {} and restored on exit):",
+                config_path.display(),
+                next_backup_path(&config_path).display()
+            ));
+            ui.info(&serde_json::to_string_pretty(&generated)?);
+            return run_command(binary, &overlay, args, ctx, ui).await;
+        }
+
+        let mut swap = ConfigSwap::begin(&home, &hermes_state_dir(ctx)?, &generated, ui)?;
+        let result = run_command(binary, &overlay, args, ctx, ui).await;
+        match swap.restore() {
+            Ok(Some(warning)) => ui.warn(&warning),
+            Ok(None) => {}
+            Err(e) => ui.warn(&format!(
+                "Could not restore your Hermes config: {e:#}. {}",
+                swap.recovery_hint()
+            )),
+        }
+        result
     }
 }
 
@@ -195,7 +243,12 @@ impl HasHermesLauncherMetadata for HermesLauncher {
             name: "Hermes CLI".to_string(),
             description: "Hermes Agent local CLI launcher".to_string(),
             default_command: "hermes".to_string(),
-            supported_capabilities: HashSet::from([BindingType::AgentModel, BindingType::Mcp]),
+            supported_capabilities: HashSet::from([
+                BindingType::AgentModel,
+                BindingType::Mcp,
+                BindingType::VoiceInput,
+            ]),
+            mcp_transports: transport_set(STDIO_AND_HTTP),
             tags: vec!["hermes".to_string(), "agent".to_string()],
         }
     }
@@ -213,6 +266,9 @@ const HERMES_HOME_ENV: &str = "HERMES_HOME";
 /// Env var the generated config's `model.api_key` field interpolates via
 /// Hermes's `${VAR_NAME}` substitution syntax.
 const API_KEY_ENV: &str = "GRANITE_CLI_HERMES_API_KEY";
+
+/// Env var the generated config's `stt.openai.api_key` field interpolates.
+const STT_API_KEY_ENV: &str = "GRANITE_CLI_HERMES_STT_API_KEY";
 
 /// The generated Hermes config file's name, relative to the launcher state dir.
 const HERMES_CONFIG_FILE: &str = "config.yaml";
@@ -233,7 +289,50 @@ fn hermes_base_url(binding: &AgentModelBinding) -> String {
     format!("{root}{prefix}")
 }
 
+/// Hermes's `stt.openai.base_url` is the API root the transcription
+/// operation is appended to, so the trailing `/audio/transcriptions` is
+/// dropped from the binding's endpoint path (keeping e.g. `/v1`).
+fn hermes_stt_base_url(binding: &VoiceInputBinding) -> String {
+    let root = binding.base_url.trim_end_matches('/');
+    let prefix = binding
+        .endpoint_path
+        .strip_suffix("/audio/transcriptions")
+        .unwrap_or("");
+    format!("{root}{prefix}")
+}
+
 impl HermesLauncher {
+    fn has_bindings(&self) -> bool {
+        self.bound_binding.is_some()
+            || !self.bound_mcp_bindings.is_empty()
+            || self.bound_voice_binding.is_some()
+    }
+
+    /// The `stt` config block for a bound speech-to-text model.
+    fn stt_config(binding: &VoiceInputBinding) -> serde_json::Value {
+        let language = binding.language.clone().unwrap_or_default();
+        let mut openai = serde_json::json!({
+            "model": binding.model_name,
+            "base_url": hermes_stt_base_url(binding),
+            "language": language,
+            "timeout": binding.timeout_seconds,
+            "max_retries": binding.max_retries,
+        });
+        if binding
+            .api_key
+            .as_ref()
+            .is_some_and(|key| !key.0.is_empty())
+        {
+            openai["api_key"] = serde_json::Value::String(format!("${{{STT_API_KEY_ENV}}}"));
+        }
+        serde_json::json!({
+            "enabled": true,
+            "provider": "openai",
+            "language": language,
+            "openai": openai,
+        })
+    }
+
     /// Builds the Hermes config describing the bound model and MCP servers.
     fn generate_config(&self) -> anyhow::Result<serde_json::Value> {
         let mut config = serde_json::json!({});
@@ -262,10 +361,10 @@ impl HermesLauncher {
 
             // Add custom headers as extra_headers if configured.
             // Sorted by key for deterministic output.
-            if let Some(ref headers) = binding.custom_headers {
-                if !headers.is_empty() {
-                    model["extra_headers"] = serde_json::to_value(headers)?;
-                }
+            if let Some(ref headers) = binding.custom_headers
+                && !headers.is_empty()
+            {
+                model["extra_headers"] = serde_json::to_value(headers)?;
             }
 
             // Merge user-provided overrides on top so they win on conflict.
@@ -319,18 +418,30 @@ impl HermesLauncher {
             config["mcp_servers"] = serde_json::Value::Object(mcp_servers);
         }
 
+        if let Some(binding) = &self.bound_voice_binding {
+            let mut stt = Self::stt_config(binding);
+            // A user-supplied `stt` in `model_overrides` wins key-by-key
+            // (shallow), same as the other top-level overrides.
+            if let Some(user) = config.get("stt").and_then(|v| v.as_object()).cloned()
+                && let Some(target) = stt.as_object_mut()
+            {
+                target.extend(user);
+            }
+            config["stt"] = stt;
+        }
+
         Ok(config)
     }
 }
 
-/// The granite-cli-owned Hermes config directory for this launcher instance.
+/// The granite-cli-owned state directory for this launcher instance. Holds
+/// the safety copy of the user's original config.
 fn hermes_state_dir(ctx: &LaunchContext) -> anyhow::Result<PathBuf> {
     crate::config::Config::launcher_state_dir(&ctx.launcher_id)
 }
 
-/// The user's own Hermes profile directory, which we only ever read from:
-/// `$HERMES_HOME` when set, else `~/.hermes`.
-fn hermes_source_dir() -> anyhow::Result<PathBuf> {
+/// The user's Hermes home: `$HERMES_HOME` when set, else `~/.hermes`.
+fn hermes_home_dir() -> anyhow::Result<PathBuf> {
     if let Ok(val) = std::env::var(HERMES_HOME_ENV)
         && !val.is_empty()
     {
@@ -341,117 +452,311 @@ fn hermes_source_dir() -> anyhow::Result<PathBuf> {
     Ok(home.join(".hermes"))
 }
 
-/// Builds `state_dir` into a usable Hermes profile: pass-through links to
-/// everything in the user's real profile (`.env`, `auth.json`, `SOUL.md`,
-/// `memories/`, `skills/`, `cron/`, `sessions/`, `logs/`), plus a freshly
-/// written `config.yaml` that granite-cli owns outright. Nothing under
-/// `source_dir` is written.
-fn materialize_hermes_config(
-    state_dir: &Path,
-    source_dir: &Path,
-    config: &serde_json::Value,
-    ui: &dyn Ui,
-) -> anyhow::Result<()> {
-    std::fs::create_dir_all(state_dir)
-        .with_context(|| format!("Failed to create {}", state_dir.display()))?;
+/// Appended to `config.yaml` to name our backup of it. See [`next_backup_path`].
+const BACKUP_SUFFIX: &str = ".bak-granite-cli";
 
-    // A nested launch can land here with source == state (the parent already
-    // redirected HERMES_HOME at us); linking a directory into itself is
-    // meaningless, and config.yaml is already ours.
-    if !same_dir(state_dir, source_dir) {
-        link_pass_through_resources(state_dir, source_dir, ui);
-    }
+/// Name of the safety copy of the original config in the launcher state dir.
+const STATE_COPY_FILE: &str = "config.yaml.original";
 
-    write_owned_yaml(&state_dir.join(HERMES_CONFIG_FILE), config)
+/// First-line prefix of the temporary config. What follows is the path the
+/// original was moved to (or `(none)`), which is how a later launch finds
+/// the original again if this one never got to restore it.
+const SWAP_MARKER: &str = "# granite-cli: temporary config for a running session; original at: ";
+
+/// A temporarily replaced `config.yaml`.
+///
+/// `begin` moves the user's config to a `.bak[.N]` backup next to it, copies
+/// it into the launcher state dir, and writes the merged config in its place.
+/// `restore` (also run on drop, as a fallback) removes ours and moves the
+/// original back. If the process dies before then, the marker line in our
+/// file lets the next `begin` put things right.
+struct ConfigSwap {
+    config_path: PathBuf,
+    /// Where the original was moved to, if there was one.
+    backup: Option<PathBuf>,
+    state_copy: PathBuf,
+    active: bool,
 }
 
-/// Links every top-level entry of the user's Hermes profile into `state_dir`,
-/// so their secrets, OAuth credentials, memories, skills, cron jobs, and
-/// sessions still apply. `config.yaml` is skipped (granite-cli generates its
-/// own).
-///
-/// Best-effort: a platform or permission that refuses symlinks costs the user
-/// those resources for granite-cli launches, not the launch itself.
-fn link_pass_through_resources(state_dir: &Path, source_dir: &Path, ui: &dyn Ui) {
-    let entries = match std::fs::read_dir(source_dir) {
-        Ok(entries) => entries,
-        // No Hermes profile of their own yet -- nothing to pass through.
-        Err(_) => return,
-    };
+impl ConfigSwap {
+    fn begin(
+        home: &Path,
+        state_dir: &Path,
+        generated: &serde_json::Value,
+        ui: &dyn Ui,
+    ) -> anyhow::Result<Self> {
+        std::fs::create_dir_all(home)
+            .with_context(|| format!("Failed to create {}", home.display()))?;
+        std::fs::create_dir_all(state_dir)
+            .with_context(|| format!("Failed to create {}", state_dir.display()))?;
+        let config_path = home.join(HERMES_CONFIG_FILE);
+        let state_copy = state_dir.join(STATE_COPY_FILE);
 
-    let mut failed = 0usize;
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        if name == HERMES_CONFIG_FILE {
-            continue;
-        }
-        // The link target must be absolute: a relative one resolves against
-        // the *link's* directory, not ours, and would dangle.
-        let Ok(target) = entry.path().canonicalize() else {
-            failed += 1;
-            continue;
+        recover_stale_swap(&config_path, &state_copy, ui);
+
+        // Parse before moving anything so a config we can't read is reported
+        // without having been touched.
+        let existing = match std::fs::read_to_string(&config_path) {
+            Ok(text) => Some(text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                return Err(e).with_context(|| format!("Failed to read {}", config_path.display()));
+            }
         };
-        let link = state_dir.join(&name);
-        match std::fs::symlink_metadata(&link) {
-            // Refresh our own link in case the target moved.
-            Ok(md) if md.file_type().is_symlink() => {
-                if std::fs::remove_file(&link).is_err() {
-                    failed += 1;
-                    continue;
+        let base = match existing.as_deref() {
+            Some(text) => serde_yaml::from_str::<serde_json::Value>(text)
+                .with_context(|| format!("{} is not valid YAML", config_path.display()))?,
+            None => serde_json::Value::Null,
+        };
+        let merged = merge_config(base, generated);
+
+        let backup = if existing.is_some() {
+            std::fs::copy(&config_path, &state_copy).with_context(|| {
+                format!("Failed to back up the config to {}", state_copy.display())
+            })?;
+            let backup = next_backup_path(&config_path);
+            std::fs::rename(&config_path, &backup).with_context(|| {
+                format!(
+                    "Failed to move {} to {}",
+                    config_path.display(),
+                    backup.display()
+                )
+            })?;
+            ui.warn(&format!(
+                "Hermes config is temporarily replaced for this session. Your original is at {} \
+                 (and a copy at {}); it is put back when Hermes exits.",
+                backup.display(),
+                state_copy.display()
+            ));
+            Some(backup)
+        } else {
+            None
+        };
+
+        let mut swap = Self {
+            config_path,
+            backup,
+            state_copy,
+            active: true,
+        };
+        if let Err(e) = swap.write_temporary(&merged) {
+            // Put things back rather than leave the user without a config.
+            let _ = swap.restore();
+            return Err(e);
+        }
+        Ok(swap)
+    }
+
+    fn write_temporary(&self, merged: &serde_json::Value) -> anyhow::Result<()> {
+        let original = self
+            .backup
+            .as_ref()
+            .map_or("(none)".to_string(), |b| b.display().to_string());
+        let body = serde_yaml::to_string(merged)
+            .with_context(|| format!("Failed to serialize {}", self.config_path.display()))?;
+        std::fs::write(
+            &self.config_path,
+            format!("{SWAP_MARKER}{original}\n{body}"),
+        )
+        .with_context(|| format!("Failed to write {}", self.config_path.display()))
+    }
+
+    /// Puts the original config back. Returns a warning to show when the
+    /// config was changed behind our back (e.g. rewritten by a Hermes
+    /// migration): that version is kept as another backup, not discarded.
+    fn restore(&mut self) -> anyhow::Result<Option<String>> {
+        if !self.active {
+            return Ok(None);
+        }
+        self.active = false;
+
+        let mut warning = None;
+        if std::fs::symlink_metadata(&self.config_path).is_ok() {
+            if has_swap_marker(&self.config_path) {
+                std::fs::remove_file(&self.config_path)
+                    .with_context(|| format!("Failed to remove {}", self.config_path.display()))?;
+            } else {
+                let aside = next_backup_path(&self.config_path);
+                std::fs::rename(&self.config_path, &aside).with_context(|| {
+                    format!("Failed to move {} aside", self.config_path.display())
+                })?;
+                warning = Some(format!(
+                    "Hermes changed its config during the session; that version was kept at {}",
+                    aside.display()
+                ));
+            }
+        }
+        if let Some(backup) = &self.backup {
+            if backup.exists() {
+                std::fs::rename(backup, &self.config_path).with_context(|| {
+                    format!(
+                        "Failed to move {} back to {}",
+                        backup.display(),
+                        self.config_path.display()
+                    )
+                })?;
+            } else {
+                // Something else removed the backup while Hermes ran. The
+                // state-dir copy exists for exactly this.
+                std::fs::copy(&self.state_copy, &self.config_path).with_context(|| {
+                    format!(
+                        "{} is gone and the copy at {} could not be restored",
+                        backup.display(),
+                        self.state_copy.display()
+                    )
+                })?;
+                let lost = format!(
+                    "The backup at {} disappeared during the session; restored your config from {}",
+                    backup.display(),
+                    self.state_copy.display()
+                );
+                warning = Some(match warning {
+                    Some(earlier) => format!("{earlier}. {lost}"),
+                    None => lost,
+                });
+            }
+        }
+        Ok(warning)
+    }
+
+    fn recovery_hint(&self) -> String {
+        match &self.backup {
+            Some(b) => format!(
+                "Your original is at {} (copy at {})",
+                b.display(),
+                self.state_copy.display()
+            ),
+            None => "There was no original config".to_string(),
+        }
+    }
+}
+
+impl Drop for ConfigSwap {
+    fn drop(&mut self) {
+        let _ = self.restore();
+    }
+}
+
+/// Merges `generated` over the user's `base` config. `model` is replaced
+/// outright (what we generate describes it completely, and stale keys beside
+/// it, such as another provider's `api_key`, would contradict it); every other
+/// section is merged key by key so the user's own settings survive.
+fn merge_config(base: serde_json::Value, generated: &serde_json::Value) -> serde_json::Value {
+    fn deep_merge(base: &mut serde_json::Value, over: &serde_json::Value) {
+        match (base.as_object_mut(), over.as_object()) {
+            (Some(base), Some(over)) => {
+                for (key, value) in over {
+                    match base.get_mut(key) {
+                        Some(existing) => deep_merge(existing, value),
+                        None => {
+                            base.insert(key.clone(), value.clone());
+                        }
+                    }
                 }
             }
-            // Something real is sitting there; leave it be.
-            Ok(_) => continue,
-            Err(_) => {}
-        }
-        if symlink(&target, &link).is_err() {
-            failed += 1;
+            _ => *base = over.clone(),
         }
     }
 
-    if failed > 0 {
-        ui.warn(&format!(
-            "Could not link {failed} Hermes resource(s) from {} into {}; \
-             secrets, auth and memories from there will not apply to this launch.",
-            source_dir.display(),
-            state_dir.display()
-        ));
-    }
-}
-
-/// Writes a file granite-cli owns outright. Any symlink already at `path` is
-/// removed first -- writing through one would land in whatever it points at,
-/// which is exactly the user's file we are trying not to touch.
-fn write_owned_yaml(path: &Path, value: &serde_json::Value) -> anyhow::Result<()> {
-    if std::fs::symlink_metadata(path).is_ok_and(|md| md.file_type().is_symlink()) {
-        std::fs::remove_file(path)
-            .with_context(|| format!("Failed to replace symlink at {}", path.display()))?;
-    }
-    let content = serde_yaml::to_string(value)
-        .with_context(|| format!("Failed to serialize {}", path.display()))?;
-    std::fs::write(path, content).with_context(|| format!("Failed to write {}", path.display()))
-}
-
-/// Whether two paths denote the same directory, comparing canonical forms when
-/// both exist and falling back to a literal comparison when they don't.
-fn same_dir(a: &Path, b: &Path) -> bool {
-    match (a.canonicalize(), b.canonicalize()) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
-    }
-}
-
-#[cfg(unix)]
-fn symlink(target: &Path, link: &Path) -> std::io::Result<()> {
-    std::os::unix::fs::symlink(target, link)
-}
-
-#[cfg(windows)]
-fn symlink(target: &Path, link: &Path) -> std::io::Result<()> {
-    if target.is_dir() {
-        std::os::windows::fs::symlink_dir(target, link)
+    let mut merged = if base.is_object() {
+        base
     } else {
-        std::os::windows::fs::symlink_file(target, link)
+        serde_json::json!({})
+    };
+    if let (Some(target), Some(generated)) = (merged.as_object_mut(), generated.as_object()) {
+        for (key, value) in generated {
+            if key == "model" {
+                target.insert(key.clone(), value.clone());
+            } else {
+                match target.get_mut(key) {
+                    Some(existing) => deep_merge(existing, value),
+                    None => {
+                        target.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
+    }
+    merged
+}
+
+/// The first of `config.yaml.bak-granite-cli`, `.bak-granite-cli.1`, ... that
+/// does not exist yet, so an existing backup is never overwritten.
+///
+/// Deliberately not `config.yaml.bak[.N]`: Hermes moves every
+/// `config.yaml.bak.<digits>` file out of its home into `backups/config/`
+/// whenever it takes one of its own config backups (its "legacy sibling"
+/// sweep), which pulled our backup out from under us mid-session. A
+/// hand-named `config.yaml.bak-*` copy is one it documents as the user's and
+/// never touches.
+fn next_backup_path(config_path: &Path) -> PathBuf {
+    let taken = |p: &Path| std::fs::symlink_metadata(p).is_ok();
+    let name = config_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| HERMES_CONFIG_FILE.to_string());
+    let first = config_path.with_file_name(format!("{name}{BACKUP_SUFFIX}"));
+    if !taken(&first) {
+        return first;
+    }
+    (1u32..)
+        .map(|i| config_path.with_file_name(format!("{name}{BACKUP_SUFFIX}.{i}")))
+        .find(|p| !taken(p))
+        .expect("an unused backup name exists")
+}
+
+/// The first line of the file at `path`, if it can be read.
+fn marker_line(path: &Path) -> Option<String> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(path).ok()?;
+    let mut line = String::new();
+    std::io::BufReader::new(file).read_line(&mut line).ok()?;
+    line.starts_with(SWAP_MARKER)
+        .then(|| line.trim_end().to_string())
+}
+
+fn has_swap_marker(path: &Path) -> bool {
+    marker_line(path).is_some()
+}
+
+/// A previous launch that died before restoring leaves our temporary config
+/// in place. Puts the original back, from the backup the marker names or
+/// else the state-dir copy, before this launch takes its own backup (which
+/// would otherwise treat our leftover as the user's config).
+fn recover_stale_swap(config_path: &Path, state_copy: &Path, ui: &dyn Ui) {
+    let Some(line) = marker_line(config_path) else {
+        return;
+    };
+    let named = line
+        .strip_prefix(SWAP_MARKER)
+        .filter(|p| *p != "(none)")
+        .map(PathBuf::from);
+
+    if std::fs::remove_file(config_path).is_err() {
+        return;
+    }
+    if let Some(backup) = named.filter(|p| p.exists()) {
+        if std::fs::rename(&backup, config_path).is_ok() {
+            ui.warn(&format!(
+                "A previous session did not restore your Hermes config; restored it from {}",
+                backup.display()
+            ));
+            return;
+        }
+    } else if line.ends_with("(none)") {
+        // There was never an original: nothing to restore.
+        return;
+    }
+    if state_copy.exists() && std::fs::copy(state_copy, config_path).is_ok() {
+        ui.warn(&format!(
+            "A previous session did not restore your Hermes config; restored it from {}",
+            state_copy.display()
+        ));
+    } else {
+        ui.warn(&format!(
+            "A previous session left a temporary Hermes config at {} and the original could not be found",
+            config_path.display()
+        ));
     }
 }
 
@@ -479,6 +784,7 @@ mod tests {
             verify_ssl: true,
             context_length: Some(131072),
             custom_headers: None,
+            supported_reasoning_efforts: vec![],
         }
     }
 
@@ -524,6 +830,56 @@ mod tests {
         assert!(l.validate_command().is_ok());
     }
 
+    // -- voice input -----------------------------------------------------------
+
+    fn voice_binding() -> VoiceInputBinding {
+        VoiceInputBinding {
+            api_type: ApiType::OpenAI,
+            provider_name: "my-llama".to_string(),
+            base_url: "http://localhost:9931/".to_string(),
+            model_name: "granite-speech".to_string(),
+            endpoint_path: "/v1/audio/transcriptions".to_string(),
+            api_key: Some(crate::registry::Secret("sk-x".to_string())),
+            verify_ssl: true,
+            language: None,
+            timeout_seconds: 60,
+            max_retries: 1,
+            custom_headers: None,
+        }
+    }
+
+    #[test]
+    fn generate_config_writes_stt_block_for_voice_binding() {
+        let mut l = launcher(serde_json::json!({}));
+        l.bound_voice_binding = Some(voice_binding());
+        let cfg = l.generate_config().unwrap();
+        assert!(cfg.get("model").is_none());
+        assert_eq!(cfg["stt"]["enabled"], true);
+        assert_eq!(cfg["stt"]["provider"], "openai");
+        assert_eq!(cfg["stt"]["openai"]["model"], "granite-speech");
+        assert_eq!(cfg["stt"]["openai"]["base_url"], "http://localhost:9931/v1");
+        assert_eq!(cfg["stt"]["openai"]["language"], "");
+        assert_eq!(cfg["stt"]["openai"]["timeout"], 60);
+        assert_eq!(cfg["stt"]["openai"]["max_retries"], 1);
+        assert_eq!(
+            cfg["stt"]["openai"]["api_key"],
+            format!("${{{STT_API_KEY_ENV}}}")
+        );
+    }
+
+    #[tokio::test]
+    async fn voice_binding_sets_stt_key_env_and_no_home_redirect() {
+        let mut l = launcher(serde_json::json!({}));
+        l.bound_voice_binding = Some(voice_binding());
+        let overlay = l.env_overlay(&ctx(true)).await.unwrap();
+        assert!(!overlay.iter().any(|e| e.key == HERMES_HOME_ENV));
+        assert!(
+            overlay
+                .iter()
+                .any(|e| e.key == STT_API_KEY_ENV && e.value == "sk-x")
+        );
+    }
+
     // -- metadata / schema -----------------------------------------------------
 
     #[test]
@@ -536,6 +892,10 @@ mod tests {
                 .contains(&BindingType::AgentModel)
         );
         assert!(meta.supported_capabilities.contains(&BindingType::Mcp));
+        assert!(
+            meta.supported_capabilities
+                .contains(&BindingType::VoiceInput)
+        );
     }
 
     #[test]
@@ -690,20 +1050,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn env_overlay_sets_hermes_home_when_bound() {
+    async fn env_overlay_never_redirects_hermes_home() {
         let overlay = bound(serde_json::json!({}), binding())
             .env_overlay(&ctx(false))
             .await
             .unwrap();
-        let home = overlay
-            .iter()
-            .find(|b| b.key == HERMES_HOME_ENV)
-            .expect("HERMES_HOME env");
-        assert!(
-            Path::new(&home.value).ends_with(Path::new("launcher-state").join("hermes")),
-            "{}",
-            home.value
-        );
+        assert!(!overlay.iter().any(|b| b.key == HERMES_HOME_ENV));
     }
 
     #[tokio::test]
@@ -723,155 +1075,285 @@ mod tests {
         assert_eq!(key.value, "sk-test");
     }
 
-    // -- pass-through linking ---------------------------------------------------
+    // -- config swap -------------------------------------------------------------
 
-    /// A (state_dir, source_dir) pair inside one tempdir.
+    /// (home, state) dirs inside one tempdir.
     fn dirs(tmp: &tempfile::TempDir) -> (PathBuf, PathBuf) {
-        let source = tmp.path().join("user-hermes");
-        std::fs::create_dir_all(&source).unwrap();
-        (tmp.path().join("state"), source)
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        (home, tmp.path().join("state"))
+    }
+
+    fn read_yaml(path: &Path) -> serde_json::Value {
+        serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
     }
 
     #[test]
-    fn materialize_writes_config_and_never_touches_source_dir() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let (state, source) = dirs(&tmp);
-        std::fs::write(
-            source.join("config.yaml"),
-            "model:\n  default: user-model\n",
-        )
-        .unwrap();
-
-        materialize_hermes_config(
-            &state,
-            &source,
-            &serde_json::json!({ "model": { "default": "granite4.1:8b" } }),
-            &CaptureUi::default(),
-        )
-        .unwrap();
-
-        assert_eq!(
-            std::fs::read_to_string(source.join("config.yaml")).unwrap(),
-            "model:\n  default: user-model\n"
-        );
-        let written: serde_json::Value =
-            serde_yaml::from_str(&std::fs::read_to_string(state.join("config.yaml")).unwrap())
-                .unwrap();
-        assert_eq!(written["model"]["default"], "granite4.1:8b");
+    fn merge_keeps_user_settings_and_replaces_model() {
+        let base = serde_json::json!({
+            "model": { "default": "old", "api_key": "stale" },
+            "voice": { "record_key": "ctrl+b" },
+            "stt": { "streaming": true, "openai": { "model": "whisper-1" } },
+        });
+        let generated = serde_json::json!({
+            "model": { "default": "new" },
+            "stt": { "enabled": true, "openai": { "model": "granite" } },
+        });
+        let merged = merge_config(base, &generated);
+        assert_eq!(merged["model"], serde_json::json!({ "default": "new" }));
+        assert_eq!(merged["voice"]["record_key"], "ctrl+b");
+        assert_eq!(merged["stt"]["streaming"], true);
+        assert_eq!(merged["stt"]["enabled"], true);
+        assert_eq!(merged["stt"]["openai"]["model"], "granite");
     }
 
-    #[cfg(unix)]
     #[test]
-    fn materialize_links_user_resources_but_not_config() {
+    fn merge_into_missing_or_non_mapping_config_yields_generated() {
+        let generated = serde_json::json!({ "model": { "default": "x" } });
+        assert_eq!(merge_config(serde_json::Value::Null, &generated), generated);
+    }
+
+    #[test]
+    fn backup_name_is_not_one_hermes_sweeps_out_of_its_home() {
+        // Hermes moves `config.yaml.bak.<digits>` siblings into
+        // `backups/config/` whenever it takes a backup of its own.
         let tmp = tempfile::TempDir::new().unwrap();
-        let (state, source) = dirs(&tmp);
-        std::fs::write(source.join(".env"), "SECRET=1").unwrap();
-        std::fs::write(source.join("auth.json"), "{}").unwrap();
-        std::fs::create_dir(source.join("memories")).unwrap();
-        std::fs::create_dir(source.join("skills")).unwrap();
-        std::fs::write(source.join("config.yaml"), "{}").unwrap();
-
-        materialize_hermes_config(
-            &state,
-            &source,
-            &serde_json::json!({}),
-            &CaptureUi::default(),
-        )
-        .unwrap();
-
-        for linked in [".env", "auth.json", "memories", "skills"] {
-            let path = state.join(linked);
-            let md = std::fs::symlink_metadata(&path)
-                .unwrap_or_else(|_| panic!("{linked} should be linked"));
-            assert!(md.file_type().is_symlink(), "{linked} should be a symlink");
-            let target = std::fs::read_link(&path).unwrap();
-            assert!(
-                target.is_absolute(),
-                "{linked} -> {} must be absolute",
-                target.display()
-            );
-            assert!(path.exists(), "{linked} link must resolve");
+        let cfg = tmp.path().join("config.yaml");
+        for _ in 0..3 {
+            let name = next_backup_path(&cfg);
+            let name = name.file_name().unwrap().to_string_lossy().to_string();
+            let hermes_sweeps = name
+                .strip_prefix("config.yaml.bak.")
+                .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()));
+            assert!(!hermes_sweeps, "{name}");
+            std::fs::write(tmp.path().join(name), "").unwrap();
         }
-        assert_eq!(
-            std::fs::read_to_string(state.join(".env")).unwrap(),
-            "SECRET=1"
-        );
-        // config.yaml is ours, not a link into the user's directory.
-        assert!(
-            !std::fs::symlink_metadata(state.join("config.yaml"))
-                .unwrap()
-                .file_type()
-                .is_symlink()
-        );
     }
 
     #[test]
-    fn materialize_works_with_no_user_hermes_profile_at_all() {
+    fn restore_recovers_from_the_state_copy_when_the_backup_vanishes() {
+        // What actually happened: Hermes swept the backup out of its home
+        // while the session ran, so the rename back had nothing to move.
         let tmp = tempfile::TempDir::new().unwrap();
-        let state = tmp.path().join("state");
-        let source = tmp.path().join("does-not-exist");
-
-        materialize_hermes_config(
+        let (home, state) = dirs(&tmp);
+        std::fs::write(home.join("config.yaml"), "orig: 1\n").unwrap();
+        let mut swap = ConfigSwap::begin(
+            &home,
             &state,
-            &source,
+            &serde_json::json!({ "model": {} }),
+            &CaptureUi::default(),
+        )
+        .unwrap();
+        let backup = swap.backup.clone().unwrap();
+        std::fs::remove_file(&backup).unwrap();
+
+        let warning = swap.restore().unwrap().expect("a warning");
+        assert!(warning.contains("disappeared"), "{warning}");
+        assert_eq!(
+            std::fs::read_to_string(home.join("config.yaml")).unwrap(),
+            "orig: 1\n"
+        );
+    }
+
+    #[test]
+    fn next_backup_path_skips_existing_backups() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cfg = tmp.path().join("config.yaml");
+        assert_eq!(
+            next_backup_path(&cfg),
+            tmp.path().join("config.yaml.bak-granite-cli")
+        );
+        std::fs::write(tmp.path().join("config.yaml.bak-granite-cli"), "").unwrap();
+        assert_eq!(
+            next_backup_path(&cfg),
+            tmp.path().join("config.yaml.bak-granite-cli.1")
+        );
+        std::fs::write(tmp.path().join("config.yaml.bak-granite-cli.1"), "").unwrap();
+        assert_eq!(
+            next_backup_path(&cfg),
+            tmp.path().join("config.yaml.bak-granite-cli.2")
+        );
+    }
+
+    #[test]
+    fn swap_merges_over_existing_config_and_restores_it_byte_for_byte() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (home, state) = dirs(&tmp);
+        let original = "# my notes\nvoice:\n  record_key: ctrl+b\n";
+        std::fs::write(home.join("config.yaml"), original).unwrap();
+        std::fs::write(home.join("config.yaml.bak"), "OLD BACKUP").unwrap();
+        std::fs::write(home.join("config.yaml.bak-granite-cli"), "OLD OURS").unwrap();
+        std::fs::write(home.join("auth.json"), "{}").unwrap();
+        let ui = CaptureUi::default();
+
+        let mut swap = ConfigSwap::begin(
+            &home,
+            &state,
+            &serde_json::json!({ "model": { "default": "granite" } }),
+            &ui,
+        )
+        .unwrap();
+
+        let during = read_yaml(&home.join("config.yaml"));
+        assert_eq!(during["model"]["default"], "granite");
+        assert_eq!(during["voice"]["record_key"], "ctrl+b");
+        // An existing backup is never clobbered; ours takes the next name.
+        assert_eq!(
+            std::fs::read_to_string(home.join("config.yaml.bak")).unwrap(),
+            "OLD BACKUP"
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join("config.yaml.bak-granite-cli")).unwrap(),
+            "OLD OURS"
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join("config.yaml.bak-granite-cli.1")).unwrap(),
+            original
+        );
+        assert_eq!(
+            std::fs::read_to_string(state.join(STATE_COPY_FILE)).unwrap(),
+            original
+        );
+        // The rest of the home is untouched, and the user is told where things are.
+        assert!(home.join("auth.json").exists());
+        assert!(
+            ui.warns
+                .borrow()
+                .iter()
+                .any(|m| m.contains("config.yaml.bak-granite-cli.1"))
+        );
+
+        assert!(swap.restore().unwrap().is_none());
+        assert_eq!(
+            std::fs::read_to_string(home.join("config.yaml")).unwrap(),
+            original
+        );
+        assert!(!home.join("config.yaml.bak-granite-cli.1").exists());
+        assert_eq!(
+            std::fs::read_to_string(home.join("config.yaml.bak")).unwrap(),
+            "OLD BACKUP"
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join("config.yaml.bak-granite-cli")).unwrap(),
+            "OLD OURS"
+        );
+    }
+
+    #[test]
+    fn swap_without_an_existing_config_removes_ours_on_restore() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (home, state) = dirs(&tmp);
+        let mut swap = ConfigSwap::begin(
+            &home,
+            &state,
             &serde_json::json!({ "model": { "default": "x" } }),
             &CaptureUi::default(),
         )
         .unwrap();
-
-        let written: serde_json::Value =
-            serde_yaml::from_str(&std::fs::read_to_string(state.join("config.yaml")).unwrap())
-                .unwrap();
-        assert_eq!(written["model"]["default"], "x");
+        assert!(home.join("config.yaml").exists());
+        swap.restore().unwrap();
+        assert!(!home.join("config.yaml").exists());
     }
 
     #[test]
-    fn materialize_tolerates_source_equal_to_state() {
+    fn swap_refuses_an_unparseable_config_without_touching_it() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let dir = tmp.path().join("both");
-        std::fs::create_dir_all(&dir).unwrap();
+        let (home, state) = dirs(&tmp);
+        std::fs::write(home.join("config.yaml"), "a: [unclosed").unwrap();
+        let err = ConfigSwap::begin(&home, &state, &serde_json::json!({}), &CaptureUi::default())
+            .err()
+            .expect("should fail");
+        assert!(err.to_string().contains("not valid YAML"));
+        assert_eq!(
+            std::fs::read_to_string(home.join("config.yaml")).unwrap(),
+            "a: [unclosed"
+        );
+        assert!(!home.join("config.yaml.bak-granite-cli").exists());
+    }
 
-        materialize_hermes_config(
-            &dir,
-            &dir,
-            &serde_json::json!({ "model": { "default": "x" } }),
+    #[test]
+    fn dropping_a_swap_restores_the_original() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (home, state) = dirs(&tmp);
+        std::fs::write(home.join("config.yaml"), "keep: me\n").unwrap();
+        drop(
+            ConfigSwap::begin(
+                &home,
+                &state,
+                &serde_json::json!({ "model": {} }),
+                &CaptureUi::default(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join("config.yaml")).unwrap(),
+            "keep: me\n"
+        );
+    }
+
+    #[test]
+    fn restore_keeps_a_config_hermes_rewrote_during_the_session() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (home, state) = dirs(&tmp);
+        std::fs::write(home.join("config.yaml"), "orig: 1\n").unwrap();
+        let mut swap = ConfigSwap::begin(
+            &home,
+            &state,
+            &serde_json::json!({ "model": {} }),
             &CaptureUi::default(),
         )
         .unwrap();
+        std::fs::write(home.join("config.yaml"), "migrated: 1\n").unwrap();
 
-        let written: serde_json::Value =
-            serde_yaml::from_str(&std::fs::read_to_string(dir.join("config.yaml")).unwrap())
-                .unwrap();
-        assert_eq!(written["model"]["default"], "x");
+        let warning = swap.restore().unwrap().expect("a warning");
+        assert!(warning.contains("config.yaml.bak-granite-cli"));
+        assert_eq!(
+            std::fs::read_to_string(home.join("config.yaml")).unwrap(),
+            "orig: 1\n"
+        );
+        // The migrated version is preserved, not lost.
+        assert_eq!(
+            std::fs::read_to_string(home.join("config.yaml.bak-granite-cli.1")).unwrap(),
+            "migrated: 1\n"
+        );
     }
 
-    #[cfg(unix)]
     #[test]
-    fn write_owned_yaml_replaces_a_symlink_instead_of_writing_through_it() {
+    fn next_launch_recovers_from_a_session_that_never_restored() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let victim = tmp.path().join("users-real-file.yaml");
-        std::fs::write(&victim, "SACRED").unwrap();
-        let link = tmp.path().join("config.yaml");
-        std::os::unix::fs::symlink(&victim, &link).unwrap();
+        let (home, state) = dirs(&tmp);
+        std::fs::write(home.join("config.yaml"), "orig: 1\n").unwrap();
+        let swap = ConfigSwap::begin(
+            &home,
+            &state,
+            &serde_json::json!({ "model": {} }),
+            &CaptureUi::default(),
+        )
+        .unwrap();
+        // Simulate a crash: Drop never runs.
+        std::mem::forget(swap);
+        assert!(has_swap_marker(&home.join("config.yaml")));
 
-        write_owned_yaml(&link, &serde_json::json!({ "ours": true })).unwrap();
-
-        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "SACRED");
-        let written: serde_json::Value =
-            serde_yaml::from_str(&std::fs::read_to_string(&link).unwrap()).unwrap();
-        assert_eq!(written["ours"], true);
+        let ui = CaptureUi::default();
+        let mut second =
+            ConfigSwap::begin(&home, &state, &serde_json::json!({ "x": 1 }), &ui).unwrap();
+        assert!(
+            ui.warns
+                .borrow()
+                .iter()
+                .any(|m| m.contains("did not restore"))
+        );
+        second.restore().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(home.join("config.yaml")).unwrap(),
+            "orig: 1\n"
+        );
+        // Our own leftover was never mistaken for the user's config.
+        assert!(!home.join("config.yaml.bak-granite-cli.1").exists());
     }
 
-    // -- launch ---------------------------------------------------------------
-
-    // Deliberately reads whatever `GRANITE_CLI_HOME` is ambient rather than
-    // setting it: env mutation would race the other tests in this binary that
-    // point that var at their own tempdirs.
     #[tokio::test]
     async fn dry_run_launch_reports_without_writing_anything() {
-        let state_dir = crate::config::Config::launcher_state_dir("hermes").unwrap();
-        let existed_before = state_dir.exists();
-
         let l = bound(serde_json::json!({ "command_path": "ls" }), binding());
         let ui = CaptureUi::default();
         let status = l
@@ -884,7 +1366,7 @@ mod tests {
         assert!(
             infos
                 .iter()
-                .any(|m| m.contains("Would write Hermes config")),
+                .any(|m| m.contains("Would merge these settings")),
             "expected a dry-run notice, got {infos:?}"
         );
         assert!(
@@ -894,18 +1376,12 @@ mod tests {
             "expected the generated config to select the model, got {infos:?}"
         );
         assert!(
-            infos.iter().any(|m| m.contains("left unmodified")),
-            "expected the source profile to be called out as untouched, got {infos:?}"
-        );
-        assert!(
             infos.iter().any(|m| m.contains("args: --help")),
             "expected caller args to pass through unmodified, got {infos:?}"
         );
-        assert_eq!(
-            state_dir.exists(),
-            existed_before,
-            "dry run must not create {}",
-            state_dir.display()
+        assert!(
+            ui.warns.borrow().is_empty(),
+            "a dry run must not swap anything"
         );
     }
 
@@ -922,7 +1398,7 @@ mod tests {
         assert!(
             !infos
                 .iter()
-                .any(|m| m.contains("Would write Hermes config")),
+                .any(|m| m.contains("Would merge these settings")),
             "expected no config write without binding"
         );
         // Without a binding there is no generated config, so hermes keeps

@@ -164,6 +164,7 @@ macro_rules! declare_sub_agent_basic {
                         verify_ssl: provider.verify_ssl(),
                         context_length: Some(configured_model.model.context_length()),
                         custom_headers: provider.custom_headers(),
+                        supported_reasoning_efforts: configured_model.model.supported_reasoning_efforts().to_vec(),
                     },
                     known_type: $known_type,
                 }))
@@ -187,6 +188,7 @@ macro_rules! declare_sub_agent_basic {
                     }],
                     tags: vec![$($tag.to_string()),*],
                     supported_binding_types: std::collections::HashSet::from([$crate::capabilities::base::BindingType::SubAgent]),
+                    auto_configurable: true,
                 }
             }
         }
@@ -354,6 +356,7 @@ macro_rules! declare_sub_agent_full {
                         verify_ssl: provider.verify_ssl(),
                         context_length: Some(configured_model.model.context_length()),
                         custom_headers: provider.custom_headers(),
+                        supported_reasoning_efforts: configured_model.model.supported_reasoning_efforts().to_vec(),
                     },
                     known_type: $known_type,
                 }))
@@ -377,6 +380,7 @@ macro_rules! declare_sub_agent_full {
                     }],
                     tags: vec![$($tag.to_string()),*],
                     supported_binding_types: std::collections::HashSet::from([$crate::capabilities::base::BindingType::SubAgent]),
+                    auto_configurable: true,
                 }
             }
         }

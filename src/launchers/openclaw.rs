@@ -12,7 +12,7 @@ use crate::capabilities::{
     AgentModelBinding, ApiType, Binding, BindingType, McpBinding, ResolvedCapability,
 };
 use crate::launchers::base::{EnvBinding, LaunchContext, Launcher, LauncherMetadata, run_command};
-use crate::launchers::shared::mcp_cli::mcp_binding_request;
+use crate::launchers::shared::mcp_cli::{STDIO_HTTP_AND_SSE, mcp_binding_request, transport_set};
 use crate::registry::{ConfigConstructable, ConstructError};
 use crate::utils::resolve_shell_command;
 use crate::utils::ui::Ui;
@@ -82,7 +82,9 @@ impl Launcher for OpenClawLauncher {
         }
 
         if capability_types.contains(&BindingType::Mcp) {
-            let binding = capability.bind(mcp_binding_request()).await?;
+            let binding = capability
+                .bind(mcp_binding_request(&Self::metadata().mcp_transports))
+                .await?;
             match binding {
                 Binding::Mcp(binding) => {
                     self.bound_mcp_bindings
@@ -174,6 +176,7 @@ impl HasOpenClawLauncherMetadata for OpenClawLauncher {
             description: "OpenClaw self-hosted AI agent launcher".to_string(),
             default_command: "openclaw".to_string(),
             supported_capabilities: HashSet::from([BindingType::AgentModel, BindingType::Mcp]),
+            mcp_transports: transport_set(STDIO_HTTP_AND_SSE),
             tags: vec!["openclaw".to_string(), "agent".to_string()],
         }
     }
@@ -250,14 +253,14 @@ fn generate_config(
 
         // Add custom headers from binding if present. Omit entirely when
         // custom_headers is empty to match the behavior of other launchers.
-        if let Some(headers) = &binding.custom_headers {
-            if !headers.is_empty() {
-                let header_map: serde_json::Map<String, serde_json::Value> = headers
-                    .iter()
-                    .map(|(k, v)| (k.clone(), serde_json::Value::String(v.0.clone())))
-                    .collect();
-                provider_entry["headers"] = serde_json::Value::Object(header_map);
-            }
+        if let Some(headers) = &binding.custom_headers
+            && !headers.is_empty()
+        {
+            let header_map: serde_json::Map<String, serde_json::Value> = headers
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.0.clone())))
+                .collect();
+            provider_entry["headers"] = serde_json::Value::Object(header_map);
         }
 
         let mut providers = serde_json::Map::new();
@@ -332,6 +335,7 @@ mod tests {
             verify_ssl: true,
             context_length: Some(131072),
             custom_headers: None,
+            supported_reasoning_efforts: vec![],
         }
     }
 
@@ -499,6 +503,7 @@ mod tests {
         headers.insert("Authorization".to_string(), Secret::from("Bearer token"));
         let b = AgentModelBinding {
             custom_headers: Some(headers),
+            supported_reasoning_efforts: vec![],
             ..binding()
         };
         let config = generate_config(Some(&b), &[]);
@@ -526,6 +531,7 @@ mod tests {
     fn generate_config_omits_headers_when_empty() {
         let b = AgentModelBinding {
             custom_headers: Some(std::collections::HashMap::new()),
+            supported_reasoning_efforts: vec![],
             ..binding()
         };
         let config = generate_config(Some(&b), &[]);

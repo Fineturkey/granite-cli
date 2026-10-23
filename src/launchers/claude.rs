@@ -14,7 +14,7 @@ use crate::capabilities::{
 use crate::launchers::base::HasLauncherMetadata as HasClaudeLauncherMetadata;
 use crate::launchers::base::{EnvBinding, LaunchContext, Launcher, LauncherMetadata, run_command};
 use crate::launchers::shared::mcp_cli::{
-    mcp_binding_request, register_mcp_server, remove_mcp_server,
+    STDIO_HTTP_AND_SSE, mcp_binding_request, register_mcp_server, remove_mcp_server, transport_set,
 };
 use crate::registry::{ConfigConstructable, ConstructError};
 use crate::utils::resolve_shell_command;
@@ -93,7 +93,9 @@ impl Launcher for ClaudeLauncher {
         }
 
         if capability_types.contains(&BindingType::Mcp) {
-            let binding = capability.bind(mcp_binding_request()).await?;
+            let binding = capability
+                .bind(mcp_binding_request(&Self::metadata().mcp_transports))
+                .await?;
             match binding {
                 Binding::Mcp(binding) => {
                     self.bound_mcp_bindings
@@ -181,31 +183,31 @@ impl Launcher for ClaudeLauncher {
             // Add custom headers if configured, formatted as "Name: Value" pairs
             // newline-separated, matching ANTHROPIC_CUSTOM_HEADERS format.
             // Sort by key for deterministic output.
-            if let Some(ref headers) = binding.custom_headers {
-                if !headers.is_empty() {
-                    let mut header_pairs: Vec<(String, String)> = headers
-                        .iter()
-                        .map(|(k, v)| {
-                            (
-                                k.clone(),
-                                serde_json::to_value(v)
-                                    .unwrap()
-                                    .as_str()
-                                    .unwrap()
-                                    .to_string(),
-                            )
-                        })
-                        .collect();
-                    header_pairs.sort_by(|a, b| a.0.cmp(&b.0));
-                    let header_lines: Vec<String> = header_pairs
-                        .iter()
-                        .map(|(k, v)| format!("{k}: {v}"))
-                        .collect();
-                    bindings.push(EnvBinding {
-                        key: "ANTHROPIC_CUSTOM_HEADERS".to_string(),
-                        value: header_lines.join("\n"),
-                    });
-                }
+            if let Some(ref headers) = binding.custom_headers
+                && !headers.is_empty()
+            {
+                let mut header_pairs: Vec<(String, String)> = headers
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            k.clone(),
+                            serde_json::to_value(v)
+                                .unwrap()
+                                .as_str()
+                                .unwrap()
+                                .to_string(),
+                        )
+                    })
+                    .collect();
+                header_pairs.sort_by(|a, b| a.0.cmp(&b.0));
+                let header_lines: Vec<String> = header_pairs
+                    .iter()
+                    .map(|(k, v)| format!("{k}: {v}"))
+                    .collect();
+                bindings.push(EnvBinding {
+                    key: "ANTHROPIC_CUSTOM_HEADERS".to_string(),
+                    value: header_lines.join("\n"),
+                });
             }
 
             // verify_ssl is dropped per user's note
@@ -428,6 +430,7 @@ impl HasClaudeLauncherMetadata for ClaudeLauncher {
                 BindingType::Mcp,
                 BindingType::SubAgent,
             ]),
+            mcp_transports: transport_set(STDIO_HTTP_AND_SSE),
             tags: vec!["claude".to_string(), "anthropic".to_string()],
         }
     }
@@ -529,6 +532,7 @@ mod tests {
                 verify_ssl: true,
                 context_length: Some(4096),
                 custom_headers: Some(headers),
+                supported_reasoning_efforts: vec![],
             }),
             vec![],
         );
@@ -557,6 +561,7 @@ mod tests {
                 verify_ssl: true,
                 context_length: Some(4096),
                 custom_headers: None,
+                supported_reasoning_efforts: vec![],
             }),
             vec![],
         );
@@ -578,6 +583,7 @@ mod tests {
                 verify_ssl: true,
                 context_length: Some(4096),
                 custom_headers: Some(HashMap::new()),
+                supported_reasoning_efforts: vec![],
             }),
             vec![],
         );
@@ -654,6 +660,7 @@ mod tests {
                 verify_ssl: true,
                 context_length: Some(4096),
                 custom_headers: None,
+                supported_reasoning_efforts: vec![],
             },
             known_type: None,
         }
@@ -894,6 +901,7 @@ mod tests {
                 verify_ssl: true,
                 context_length: Some(4096),
                 custom_headers: None,
+                supported_reasoning_efforts: vec![],
             }),
             vec![(
                 "reviewer".to_string(),
