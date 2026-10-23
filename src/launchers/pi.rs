@@ -10,7 +10,8 @@
 
 use crate::capabilities::{AgentModelBinding, BindingType, ResolvedCapability, ToolName};
 use crate::launchers::base::{
-    EnvBinding, LaunchContext, Launcher, LauncherMetadata, run_command, run_command_captured,
+    EnvBinding, LaunchContext, Launcher, LauncherMetadata, run_command,
+    run_command_captured_killable,
 };
 use crate::providers::ApiType;
 use crate::registry::{ConfigConstructable, ConstructError};
@@ -281,7 +282,8 @@ impl PiLauncher {
     }
 
     /// Runs `pi` headlessly for one delegated sub-agent task and returns its
-    /// captured stdout. Requires a prior `bind_capability` call -- there is no
+    /// captured stdout. Dropping the returned future kills `pi` (see
+    /// [`run_command_captured_killable`]). Requires a prior `bind_capability` call -- there is no
     /// sensible way to pick a model on the caller's behalf, so an unbound
     /// launcher here is a bug in the caller, not a runtime condition.
     pub(crate) async fn run_delegated_task(
@@ -312,7 +314,7 @@ impl PiLauncher {
 
         let overlay = self.env_overlay(ctx).await?;
         let (status, stdout, stderr) =
-            run_command_captured(binary.to_path_buf(), &overlay, &full_args, ctx).await?;
+            run_command_captured_killable(binary.to_path_buf(), &overlay, &full_args, ctx).await?;
         if !status.success() {
             anyhow::bail!("pi exited with {status}: {stderr}");
         }
