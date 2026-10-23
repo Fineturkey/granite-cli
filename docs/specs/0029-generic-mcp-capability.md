@@ -43,7 +43,6 @@ standard entry:
 | `command`, `args`, `env` | stdio | `command` required for stdio. `env` values are `Secret` |
 | `url`, `headers` | http, sse | `url` required. `headers` values are `Secret` |
 | `timeout` | all | ms, optional |
-| `oauth` | http, sse | optional, see Auth |
 
 Validation: stdio requires `command` and forbids `url`; http/sse require
 `url` and forbid `command`; `url` must parse with an http(s) scheme.
@@ -63,39 +62,48 @@ never recommend or create an `mcp-server`.
 
 ## Auth
 
-MCP authorization is OAuth 2.1 (protected-resource metadata RFC 9728 ->
-authorization-server metadata RFC 8414 -> dynamic client registration ->
-browser PKCE flow -> token refresh). First version scope:
+MCP authorization is OAuth 2.1: a client that gets a 401 discovers the
+authorization server (protected-resource metadata RFC 9728, then
+authorization-server metadata RFC 8414), registers itself by dynamic client
+registration, and runs a browser PKCE flow. That is the launcher's job, and
+it needs nothing beyond the server `url` (confirmed with BobIDE against an
+OAuth server). So:
 
 1. **Static credentials, all launchers.** Bearer tokens / API keys via
    `headers` (`Authorization: Bearer ...`), env vars for stdio. `Secret`-typed
    so prompts mask them and `Debug` never prints them.
-2. **Launcher-native OAuth, pass-through.** Optional `oauth` block:
-   `client_id`, `client_secret` (`Secret`), `callback_port`, `scope`. Added to
-   the `Http`/`Sse` variants of `McpBinding` as
-   `oauth: Option<McpOAuth>`. Launchers that run OAuth themselves render it;
-   others ignore it and warn if the server then needs interactive auth.
-   With no `oauth` block, a launcher's own discovery + dynamic registration
-   still runs where it supports it.
-3. **Out of scope:** granite-cli performing the flow, storing/refreshing
-   tokens. Revisit as a follow-up spec if launcher coverage proves too thin.
+2. **OAuth servers: set `url` only.** granite-cli passes the entry through and
+   the launcher's own client runs the flow. There is no `oauth` setting; an
+   `oauth` key in a config is rejected like any unknown field.
+3. **Out of scope:** granite-cli performing the flow or storing/refreshing
+   tokens.
+
+**Deferred: pre-registered OAuth clients.** A server whose authorization
+server does not support dynamic client registration needs a `client_id`
+(sometimes a secret or a fixed callback port) in the client's config. There
+is no standard place for that in `mcp.json`. `claude mcp add-json` accepts
+`oauth: {clientId, callbackPort}` and stores it, but whether claude uses it in
+a real flow was not verified, and no other launcher has an equivalent that was
+checked. A first version carried these fields and was removed: it served one
+launcher, was silently ignored by the rest, and the schema prompt filled the
+optional block with zeros. Revisit as a launcher-specific option when a
+server needs it, verifying against the real tool first.
 
 ### Launcher matrix
 
-| launcher | stdio | http | sse | headers | native OAuth |
-|---|---|---|---|---|---|
-| claude | yes | yes | yes | yes | yes (`add-json` accepts an `oauth` block) |
-| opencode | yes | yes | yes (as `remote`) | yes | unconfirmed: has `opencode mcp auth` for the flow, but its config schema for client hints was not checked; `oauth` is not rendered |
-| bob / bobide | yes | yes | unconfirmed (`bob mcp add-json` stores `sse` but `mcp list` shows `http`) | yes | unconfirmed |
-| hermes | yes | yes | unconfirmed (not tested) | yes | no |
-| openclaw | yes | yes | yes | yes | no |
-| goose | yes | yes | no | no | no |
+| launcher | stdio | http | sse | headers |
+|---|---|---|---|---|
+| claude | yes | yes | yes | yes |
+| opencode | yes | yes | yes (as `remote`) | yes |
+| bob / bobide | yes | yes | unconfirmed (`bob mcp add-json` stores `sse` but `mcp list` shows `http`) | yes |
+| hermes | yes | yes | unconfirmed (not tested) | yes |
+| openclaw | yes | yes | yes | yes |
+| goose | yes | yes | no | no |
 
 Each launcher passes the transports in its column to
 `mcp_binding_request(...)`. Implemented sets: claude, opencode and openclaw
 offer Stdio/Http/Sse (claude confirmed by running `claude mcp add-json` with
-`type: sse` and an `oauth` block, which it stored verbatim with camelCase
-`clientId`/`callbackPort`); hermes, goose, bob and bobide offer Stdio/Http
+`type: sse`, which it stored); hermes, goose, bob and bobide offer Stdio/Http
 only until SSE is confirmed for them. An SSE server bound to one of those
 fails with an error naming the server and both transport sets.
 
@@ -115,31 +123,30 @@ depend on it: `mcp-server` is set up through the existing schema prompt.
 
 ## Implementation steps
 
-1. `base.rs`: add `McpOAuth`; add `oauth` to `McpBinding::{Http,Sse}`; update
-   `to_canonical_json()` (emits `oauth` in the shape claude expects). Update
-   the ~15 construction sites (all are `oauth: None`).
-2. `src/capabilities/mcp_server.rs`: config, validation, `${VAR}` expansion,
+1. `src/capabilities/mcp_server.rs`: config, validation, `${VAR}` expansion,
    capability + metadata, `bind()` (intersects requested transports with the
    configured one; errors name both).
-3. Register `mcp-server` in `CAPABILITY_REGISTRY`.
-4. Make `mcp_binding_request` take the launcher's transport set; update each
-   launcher; fix goose SSE mapping.
-5. Render `oauth` in claude (via canonical JSON, verified). Other launchers
-   ignore it; opencode rendering is deferred until its config schema is
-   confirmed. Warning when a launcher drops `oauth` is not yet implemented.
-6. Docs: README capability table via the `update-capability-table` skill.
+2. Register `mcp-server` in `CAPABILITY_REGISTRY`; add `auto_configurable` to
+   `CapabilityMetadata` so setup discovery skips it.
+3. Add `mcp_transports` to `LauncherMetadata`; each launcher builds its MCP
+   bind request from it; fix goose SSE mapping.
+4. Add `CapabilityInfo::mcp_transport` and one shared `mcp_transport_conflict`
+   check, used by the launcher setup picker and by `validate`
+   (`Problem::IncompatibleTransport`). The bind-time error remains the
+   backstop.
+5. Docs: README capability table via the `update-capability-table` skill.
 
 ## Testing
 
 All unit tests are environment-independent (per AGENTS.md): config parsing and
 validation per transport, alias handling, `${VAR}` expansion with an injected
-env lookup, `bind()` transport intersection, canonical JSON with and without
-`oauth`, per-launcher rendering of each transport, goose SSE rejection. No
+env lookup, `bind()` transport intersection, per-launcher rendering of each
+transport, goose SSE rejection, enable-time and validation transport checks. No
 test starts a real MCP server or touches the network.
 
 ## Open questions
 
 - Should `${VAR}` expansion fail on unset variables with no default, or pass
   the literal through? Proposed: fail at bind with the variable name.
-- bob/bobide SSE and OAuth behavior need confirmation against the installed
-  `bob` before the matrix is final.
+- bob/bobide and hermes SSE need confirmation against the installed tools
+  before the matrix is final.
