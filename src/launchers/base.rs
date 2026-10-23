@@ -265,6 +265,10 @@ pub(crate) async fn run_command(
 ///
 /// Returns `(exit_status, stdout, stderr)`. A non-success exit status is
 /// returned as `Ok` -- the caller decides what a bad code means.
+///
+/// Only reached from [`run_command_captured_killable`]'s Windows branch, which
+/// needs this path's WSL/PE-compatibility fallbacks.
+#[cfg(windows)]
 pub(crate) async fn run_command_captured(
     binary: PathBuf,
     overlay: &[EnvBinding],
@@ -272,27 +276,7 @@ pub(crate) async fn run_command_captured(
     ctx: &LaunchContext,
 ) -> anyhow::Result<(std::process::ExitStatus, String, String)> {
     if ctx.dry_run {
-        // Return a dummy success status so callers don't need to special-case
-        // dry_run.  The exit status and captured strings are meaningless in this
-        // mode anyway.
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::ExitStatusExt;
-            return Ok((
-                std::process::ExitStatus::from_raw(0),
-                String::new(),
-                String::new(),
-            ));
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::ExitStatusExt;
-            return Ok((
-                std::process::ExitStatus::from_raw(0),
-                String::new(),
-                String::new(),
-            ));
-        }
+        return Ok((dry_run_success_status(), String::new(), String::new()));
     }
 
     // Translate WSL paths in env vars when spawning a native Windows binary.
@@ -390,6 +374,89 @@ pub(crate) async fn run_command_captured(
         },
     )
     .await?
+}
+
+/// Like [`run_command_captured`], but the child is killed if the returned
+/// future is dropped before it completes -- which is how a cancelled
+/// delegated sub-agent stops burning the model behind it. On Unix the child
+/// leads its own process group and the whole group is killed, so anything it
+/// spawned (e.g. `pi`'s `bash` tool) goes with it.
+///
+/// On Windows this defers to [`run_command_captured`], whose
+/// WSL/PE-compatibility fallbacks this path does not replicate; there, dropping
+/// the future does not stop the child.
+pub(crate) async fn run_command_captured_killable(
+    binary: PathBuf,
+    overlay: &[EnvBinding],
+    args: &[String],
+    ctx: &LaunchContext,
+) -> anyhow::Result<(std::process::ExitStatus, String, String)> {
+    if ctx.dry_run {
+        return Ok((dry_run_success_status(), String::new(), String::new()));
+    }
+
+    #[cfg(windows)]
+    return run_command_captured(binary, overlay, args, ctx).await;
+
+    #[cfg(not(windows))]
+    {
+        let mut cmd = tokio::process::Command::new(&binary);
+        cmd.args(args)
+            .current_dir(&ctx.working_dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .process_group(0);
+        for binding in overlay {
+            cmd.env(&binding.key, &binding.value);
+        }
+
+        let child = cmd.spawn()?;
+        let mut group = ProcessGroupKillGuard(child.id());
+        let output = child.wait_with_output().await?;
+        // The child has exited and been reaped; its pid may be reused, so the
+        // guard must not signal it any more.
+        group.0 = None;
+        Ok((
+            output.status,
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        ))
+    }
+}
+
+/// Kills the process group led by the held pid when dropped while still armed.
+/// `kill_on_drop` only signals the direct child; this reaches its descendants.
+#[cfg(not(windows))]
+struct ProcessGroupKillGuard(Option<u32>);
+
+#[cfg(not(windows))]
+impl Drop for ProcessGroupKillGuard {
+    fn drop(&mut self) {
+        if let Some(pid) = self.0 {
+            let _ = std::process::Command::new("kill")
+                .args(["-s", "KILL", "--", &format!("-{pid}")])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+    }
+}
+
+/// A successful exit status with no output, returned by the captured runners
+/// in dry-run mode so callers don't need to special-case it.
+fn dry_run_success_status() -> std::process::ExitStatus {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(0)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(0)
+    }
 }
 
 /// Metadata describing a launcher implementation (type-level, catalog entry).
@@ -785,6 +852,111 @@ pub(crate) mod tests {
 
         let status = run_command(binary, &[], &args, &ctx, &ui).await.unwrap();
         assert!(status.success());
+    }
+
+    #[cfg(unix)]
+    fn live_ctx() -> LaunchContext {
+        LaunchContext {
+            launcher_id: "test".to_string(),
+            working_dir: std::env::temp_dir(),
+            base_env: HashMap::new(),
+            dry_run: false,
+            usage_tracker: None,
+            model_proxy: None,
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn killable_runner_captures_output_and_status() {
+        let (status, stdout, _) = run_command_captured_killable(
+            PathBuf::from("/bin/sh"),
+            &[],
+            &["-c".to_string(), "echo hello".to_string()],
+            &live_ctx(),
+        )
+        .await
+        .unwrap();
+        assert!(status.success());
+        assert_eq!(stdout.trim(), "hello");
+    }
+
+    #[test]
+    fn dry_run_killable_runner_returns_success_without_spawning() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let ctx = LaunchContext {
+            launcher_id: "test".to_string(),
+            working_dir: PathBuf::from("/nonexistent"),
+            base_env: HashMap::new(),
+            dry_run: true,
+            usage_tracker: None,
+            model_proxy: None,
+        };
+        let (status, stdout, stderr) = rt
+            .block_on(run_command_captured_killable(
+                PathBuf::from("/nonexistent/binary"),
+                &[],
+                &[],
+                &ctx,
+            ))
+            .unwrap();
+        assert!(status.success());
+        assert!(stdout.is_empty() && stderr.is_empty());
+    }
+
+    /// Dropping the future must kill the child *and* its descendants: the
+    /// shell below backgrounds a grandchild and reports its pid.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dropping_the_killable_runner_kills_the_child_and_its_descendants() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("grandchild.pid");
+        let script = format!("sleep 300 & echo $! > '{}'; wait", pid_file.display());
+        let args = ["-c".to_string(), script];
+        let ctx = live_ctx();
+        let run = run_command_captured_killable(PathBuf::from("/bin/sh"), &[], &args, &ctx);
+
+        // Let the shell start and record its grandchild, then abandon the run.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::pin!(run);
+            loop {
+                tokio::select! {
+                    _ = &mut run => break,
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => {
+                        if pid_file.exists()
+                            && !std::fs::read_to_string(&pid_file).unwrap_or_default().trim().is_empty()
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+        })
+        .await;
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .expect("the shell should have recorded its background child")
+            .trim()
+            .parse()
+            .unwrap();
+
+        // `run` was dropped when the block above ended. Give the kill a moment.
+        let mut dead = false;
+        for _ in 0..100 {
+            let alive = std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if !alive {
+                dead = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(dead, "descendant process {pid} survived the drop");
     }
 
     /// Two capabilities against one configured model, the second of which
