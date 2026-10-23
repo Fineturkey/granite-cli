@@ -222,19 +222,6 @@ pub enum McpTransportKind {
     Sse,
 }
 
-/// OAuth hints for a remote MCP server, passed through to launchers that run
-/// the OAuth flow themselves. granite-cli never performs the flow or holds
-/// tokens; with no hints a launcher's own discovery and dynamic client
-/// registration still apply where it supports them.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct McpOAuth {
-    /// Pre-registered OAuth client id, for servers without dynamic client
-    /// registration.
-    pub client_id: Option<String>,
-    /// Fixed local port for the OAuth redirect callback.
-    pub callback_port: Option<u16>,
-}
-
 /// Request payload for `BindingType::Mcp` -- which transports the launcher
 /// can actually register with the downstream tool. `bind()` picks the best
 /// transport it can serve from this set.
@@ -263,14 +250,12 @@ pub enum McpBinding {
         headers: HashMap<String, String>,
         /// Optional request timeout in milliseconds.
         timeout: Option<u64>,
-        oauth: Option<McpOAuth>,
     },
     Sse {
         url: String,
         headers: HashMap<String, String>,
         /// Optional request timeout in milliseconds.
         timeout: Option<u64>,
-        oauth: Option<McpOAuth>,
     },
 }
 
@@ -350,7 +335,6 @@ impl McpBinding {
                 url,
                 headers,
                 timeout,
-                oauth,
             } => {
                 map.insert("type".into(), serde_json::json!("http"));
                 map.insert("url".into(), serde_json::json!(url));
@@ -358,13 +342,11 @@ impl McpBinding {
                 if let Some(t) = timeout {
                     map.insert("timeout".into(), serde_json::json!(t));
                 }
-                insert_oauth(&mut map, oauth.as_ref());
             }
             McpBinding::Sse {
                 url,
                 headers,
                 timeout,
-                oauth,
             } => {
                 map.insert("type".into(), serde_json::json!("sse"));
                 map.insert("url".into(), serde_json::json!(url));
@@ -372,26 +354,9 @@ impl McpBinding {
                 if let Some(t) = timeout {
                     map.insert("timeout".into(), serde_json::json!(t));
                 }
-                insert_oauth(&mut map, oauth.as_ref());
             }
         }
         serde_json::Value::Object(map)
-    }
-}
-
-/// Adds claude's camelCase `oauth` block (`clientId`, `callbackPort`) when
-/// there is anything to say; an empty hint set is omitted entirely.
-fn insert_oauth(map: &mut serde_json::Map<String, serde_json::Value>, oauth: Option<&McpOAuth>) {
-    let Some(oauth) = oauth else { return };
-    let mut block = serde_json::Map::new();
-    if let Some(id) = &oauth.client_id {
-        block.insert("clientId".into(), serde_json::json!(id));
-    }
-    if let Some(port) = oauth.callback_port {
-        block.insert("callbackPort".into(), serde_json::json!(port));
-    }
-    if !block.is_empty() {
-        map.insert("oauth".into(), serde_json::Value::Object(block));
     }
 }
 
@@ -621,7 +586,6 @@ mod mcp_binding_tests {
             url: "http://127.0.0.1:54321/mcp".to_string(),
             headers: HashMap::from([("X-Test".to_string(), "1".to_string())]),
             timeout: None,
-            oauth: None,
         }
     }
 
@@ -649,7 +613,6 @@ mod mcp_binding_tests {
             url: "http://127.0.0.1:1/sse".to_string(),
             headers: HashMap::new(),
             timeout: None,
-            oauth: None,
         }
         .to_canonical_json();
         assert_eq!(json["type"], "sse");
@@ -661,7 +624,6 @@ mod mcp_binding_tests {
             url: "http://127.0.0.1:1/mcp".to_string(),
             headers: HashMap::new(),
             timeout: Some(300_000),
-            oauth: None,
         }
         .to_canonical_json();
         assert_eq!(json["timeout"], 300_000u64);
@@ -677,36 +639,6 @@ mod mcp_binding_tests {
         }
         .to_canonical_json();
         assert!(!json.as_object().unwrap().contains_key("timeout"));
-    }
-
-    #[test]
-    fn canonical_json_emits_claude_style_oauth_block() {
-        let json = McpBinding::Http {
-            url: "https://x.example/mcp".to_string(),
-            headers: HashMap::new(),
-            timeout: None,
-            oauth: Some(McpOAuth {
-                client_id: Some("abc".to_string()),
-                callback_port: Some(8080),
-            }),
-        }
-        .to_canonical_json();
-        assert_eq!(json["oauth"]["clientId"], "abc");
-        assert_eq!(json["oauth"]["callbackPort"], 8080);
-    }
-
-    #[test]
-    fn canonical_json_omits_oauth_when_absent_or_empty() {
-        for oauth in [None, Some(McpOAuth::default())] {
-            let json = McpBinding::Sse {
-                url: "https://x.example/sse".to_string(),
-                headers: HashMap::new(),
-                timeout: None,
-                oauth,
-            }
-            .to_canonical_json();
-            assert!(!json.as_object().unwrap().contains_key("oauth"));
-        }
     }
 
     #[test]

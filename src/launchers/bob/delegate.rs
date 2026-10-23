@@ -296,7 +296,6 @@ pub(crate) async fn start_delegate_mcp_server(
             url,
             headers: HashMap::new(),
             timeout: Some(7_200_000), // 2 hours in milliseconds
-            oauth: None,
         },
         server,
     ))

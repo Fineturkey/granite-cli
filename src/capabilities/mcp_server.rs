@@ -5,12 +5,13 @@
 //! server entry (`command`/`args`/`env` for stdio, `url`/`headers` for
 //! Streamable HTTP or SSE) and `bind()` hands it back as an [`McpBinding`];
 //! each launcher renders that into its own native format. granite-cli runs
-//! no server of its own and never performs an OAuth flow -- optional OAuth
-//! hints are passed to launchers that run the flow themselves.
+//! no server of its own and never performs an OAuth flow. A server that
+//! uses OAuth needs only its `url`: the launcher's own client discovers the
+//! authorization server and runs the flow.
 
 use crate::capabilities::base::{
     Binding, BindingRequest, BindingType, Capability, CapabilityInfo, CapabilityMetadata,
-    HasCapabilityMetadata, McpBinding, McpBindingRequest, McpOAuth, McpTransportKind,
+    HasCapabilityMetadata, McpBinding, McpBindingRequest, McpTransportKind,
 };
 use crate::registry::{ConfigConstructable, ConstructError, Secret};
 use async_trait::async_trait;
@@ -65,10 +66,6 @@ pub struct McpServerCapabilityConfig {
     /// Request timeout in milliseconds.
     #[serde(default)]
     pub(crate) timeout: Option<u64>,
-    /// OAuth hints for launchers that run the flow themselves (http and sse
-    /// only).
-    #[serde(default)]
-    pub(crate) oauth: Option<McpOAuth>,
 }
 
 impl Default for McpServerCapabilityConfig {
@@ -81,7 +78,6 @@ impl Default for McpServerCapabilityConfig {
             url: None,
             headers: HashMap::new(),
             timeout: None,
-            oauth: None,
         }
     }
 }
@@ -247,14 +243,12 @@ impl ResolvedMcpServerCapability {
                         url,
                         headers,
                         timeout: cfg.timeout,
-                        oauth: cfg.oauth.clone(),
                     }
                 } else {
                     McpBinding::Sse {
                         url,
                         headers,
                         timeout: cfg.timeout,
-                        oauth: cfg.oauth.clone(),
                     }
                 }
             }
@@ -263,26 +257,12 @@ impl ResolvedMcpServerCapability {
     }
 }
 
-/// Drops values that say "not set" the way the setup prompt writes them. The
-/// schema prompt treats an `Option<T>` as a `T` and fills in `0` for a number
-/// or an empty object it was not given, so an optional `timeout` or `oauth`
-/// block arrives as `0` / all-empty. Neither means anything as a real value (a
-/// 0 ms timeout, a callback on port 0), and `oauth` on a stdio server would
-/// otherwise fail validation.
+/// Drops a `timeout` of `0`, which is how the setup prompt writes an optional
+/// number it was not given (it treats an `Option<T>` as a `T`). A 0 ms timeout
+/// means nothing, and would otherwise reach the launcher as a real value.
 fn normalize(cfg: &mut McpServerCapabilityConfig) {
     if cfg.timeout == Some(0) {
         cfg.timeout = None;
-    }
-    if let Some(oauth) = &mut cfg.oauth {
-        if oauth.callback_port == Some(0) {
-            oauth.callback_port = None;
-        }
-        if oauth.client_id.as_deref().is_some_and(str::is_empty) {
-            oauth.client_id = None;
-        }
-        if *oauth == McpOAuth::default() {
-            cfg.oauth = None;
-        }
     }
 }
 
@@ -297,7 +277,6 @@ fn validate(cfg: &McpServerCapabilityConfig) -> Result<(), String> {
             for (field, present) in [
                 ("url", cfg.url.is_some()),
                 ("headers", !cfg.headers.is_empty()),
-                ("oauth", cfg.oauth.is_some()),
             ] {
                 if present {
                     return Err(format!("{field}: not valid for the stdio transport"));
@@ -414,31 +393,17 @@ mod tests {
     }
 
     #[test]
-    fn http_entry_carries_headers_and_oauth_hints() {
+    fn http_entry_carries_headers() {
         let cap = build(json!({
             "type": "http", "url": "https://x.example/mcp",
-            "headers": {"Authorization": "Bearer t"},
-            "oauth": {"client_id": "abc", "callback_port": 8080}
+            "headers": {"Authorization": "Bearer t"}
         }))
         .unwrap();
-        let McpBinding::Http {
-            url,
-            headers,
-            oauth,
-            ..
-        } = bound(&cap)
-        else {
+        let McpBinding::Http { url, headers, .. } = bound(&cap) else {
             panic!("expected Http");
         };
         assert_eq!(url, "https://x.example/mcp");
         assert_eq!(headers["Authorization"], "Bearer t");
-        assert_eq!(
-            oauth,
-            Some(McpOAuth {
-                client_id: Some("abc".into()),
-                callback_port: Some(8080)
-            })
-        );
     }
 
     #[test]
@@ -557,50 +522,41 @@ mod tests {
     }
 
     #[test]
-    fn prompt_filled_zero_values_are_treated_as_unset() {
-        // What `capability setup` saves for an http server whose optional
-        // fields were left alone (see the schema prompt's handling of
-        // `Option<T>`).
+    fn prompt_filled_zero_timeout_is_treated_as_unset() {
+        // What `capability setup` saves for a server whose optional timeout
+        // was left alone (the schema prompt fills an `Option<T>` as a `T`).
         let cap = build(json!({
             "type": "http", "url": "http://127.0.0.1:9006/mcp",
-            "args": [], "command": null, "env": {}, "headers": {},
-            "timeout": 0, "oauth": {"callback_port": 0, "client_id": null}
+            "args": [], "command": null, "env": {}, "headers": {}, "timeout": 0
         }))
         .unwrap();
-        let McpBinding::Http { timeout, oauth, .. } = bound(&cap) else {
+        let McpBinding::Http { timeout, .. } = bound(&cap) else {
             panic!("expected Http");
         };
         assert_eq!(timeout, None);
-        assert_eq!(oauth, None);
     }
 
     #[test]
-    fn prompt_filled_oauth_on_a_stdio_server_is_not_a_conflict() {
-        let cap = build(json!({
-            "type": "stdio", "command": "npx",
-            "oauth": {"callback_port": 0, "client_id": null}, "timeout": 0
-        }));
-        assert!(cap.is_ok(), "{:?}", cap.err().map(|e| e.to_string()));
-    }
-
-    #[test]
-    fn real_oauth_hints_survive_normalization() {
-        let cap = build(json!({
-            "type": "http", "url": "https://x.example/mcp",
-            "timeout": 3000, "oauth": {"callback_port": 8080, "client_id": null}
-        }))
-        .unwrap();
-        let McpBinding::Http { timeout, oauth, .. } = bound(&cap) else {
+    fn a_real_timeout_survives_normalization() {
+        let cap = build(json!({"type": "http", "url": "https://x.example/mcp", "timeout": 3000}))
+            .unwrap();
+        let McpBinding::Http { timeout, .. } = bound(&cap) else {
             panic!("expected Http");
         };
         assert_eq!(timeout, Some(3000));
-        assert_eq!(
-            oauth,
-            Some(McpOAuth {
-                client_id: None,
-                callback_port: Some(8080)
-            })
-        );
+    }
+
+    #[test]
+    fn oauth_is_not_a_setting() {
+        // OAuth servers need only their url; the launcher's client runs the
+        // flow. The field is rejected rather than silently ignored.
+        let err = build(json!({
+            "type": "http", "url": "https://x.example/mcp", "oauth": {"client_id": "abc"}
+        }))
+        .err()
+        .expect("oauth is not a field")
+        .to_string();
+        assert!(err.contains("oauth"), "{err}");
     }
 
     #[test]

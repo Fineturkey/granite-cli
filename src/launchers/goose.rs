@@ -667,7 +667,6 @@ mod tests {
                 url: "http://127.0.0.1:54321/mcp".to_string(),
                 headers: Default::default(),
                 timeout: None,
-                oauth: None,
             },
         );
         let ui = CaptureUi::default();
@@ -695,7 +694,6 @@ mod tests {
                     "Bearer x".to_string(),
                 )]),
                 timeout: None,
-                oauth: None,
             },
         );
         let ui = CaptureUi::default();
