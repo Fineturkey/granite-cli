@@ -101,8 +101,9 @@ impl ConfigConstructable for McpServerCapability {
     type Config = McpServerCapabilityConfig;
 
     fn new(instance_id: &str, cfg: &serde_json::Value) -> Result<Self, ConstructError> {
-        let config: McpServerCapabilityConfig =
+        let mut config: McpServerCapabilityConfig =
             serde_json::from_value(cfg.clone()).map_err(ConstructError::settings)?;
+        normalize(&mut config);
         validate(&config).map_err(ConstructError::settings)?;
         Ok(Self {
             instance_id: instance_id.to_string(),
@@ -259,6 +260,29 @@ impl ResolvedMcpServerCapability {
             }
         };
         Ok(Binding::Mcp(binding))
+    }
+}
+
+/// Drops values that say "not set" the way the setup prompt writes them. The
+/// schema prompt treats an `Option<T>` as a `T` and fills in `0` for a number
+/// or an empty object it was not given, so an optional `timeout` or `oauth`
+/// block arrives as `0` / all-empty. Neither means anything as a real value (a
+/// 0 ms timeout, a callback on port 0), and `oauth` on a stdio server would
+/// otherwise fail validation.
+fn normalize(cfg: &mut McpServerCapabilityConfig) {
+    if cfg.timeout == Some(0) {
+        cfg.timeout = None;
+    }
+    if let Some(oauth) = &mut cfg.oauth {
+        if oauth.callback_port == Some(0) {
+            oauth.callback_port = None;
+        }
+        if oauth.client_id.as_deref().is_some_and(str::is_empty) {
+            oauth.client_id = None;
+        }
+        if *oauth == McpOAuth::default() {
+            cfg.oauth = None;
+        }
     }
 }
 
@@ -530,6 +554,53 @@ mod tests {
         let err = expand("${MISSING}", &no_env).unwrap_err().to_string();
         assert!(err.contains("MISSING"), "{err}");
         assert!(expand("${oops", &no_env).is_err());
+    }
+
+    #[test]
+    fn prompt_filled_zero_values_are_treated_as_unset() {
+        // What `capability setup` saves for an http server whose optional
+        // fields were left alone (see the schema prompt's handling of
+        // `Option<T>`).
+        let cap = build(json!({
+            "type": "http", "url": "http://127.0.0.1:9006/mcp",
+            "args": [], "command": null, "env": {}, "headers": {},
+            "timeout": 0, "oauth": {"callback_port": 0, "client_id": null}
+        }))
+        .unwrap();
+        let McpBinding::Http { timeout, oauth, .. } = bound(&cap) else {
+            panic!("expected Http");
+        };
+        assert_eq!(timeout, None);
+        assert_eq!(oauth, None);
+    }
+
+    #[test]
+    fn prompt_filled_oauth_on_a_stdio_server_is_not_a_conflict() {
+        let cap = build(json!({
+            "type": "stdio", "command": "npx",
+            "oauth": {"callback_port": 0, "client_id": null}, "timeout": 0
+        }));
+        assert!(cap.is_ok(), "{:?}", cap.err().map(|e| e.to_string()));
+    }
+
+    #[test]
+    fn real_oauth_hints_survive_normalization() {
+        let cap = build(json!({
+            "type": "http", "url": "https://x.example/mcp",
+            "timeout": 3000, "oauth": {"callback_port": 8080, "client_id": null}
+        }))
+        .unwrap();
+        let McpBinding::Http { timeout, oauth, .. } = bound(&cap) else {
+            panic!("expected Http");
+        };
+        assert_eq!(timeout, Some(3000));
+        assert_eq!(
+            oauth,
+            Some(McpOAuth {
+                client_id: None,
+                callback_port: Some(8080)
+            })
+        );
     }
 
     #[test]
