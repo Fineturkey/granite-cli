@@ -437,6 +437,11 @@ pub struct CapabilityMetadata {
     /// concrete instance may choose to support only a subset via
     /// `Capability::binding_types`.
     pub supported_binding_types: HashSet<BindingType>,
+    /// Whether the setup wizard can configure this type without the user
+    /// supplying anything specific to it (e.g. by picking a model). `false`
+    /// for types like `mcp-server` whose config is the user's own, so they
+    /// are never recommended or created by `--auto`.
+    pub auto_configurable: bool,
 }
 
 impl std::fmt::Display for CapabilityMetadata {
@@ -636,6 +641,7 @@ mod mcp_binding_tests {
             dependencies: vec![],
             tags: vec!["vision".to_string(), "mcp".to_string()],
             supported_binding_types: HashSet::new(),
+            auto_configurable: true,
         };
         let fields = meta.search_fields();
         assert!(fields.contains(&"Vision MCP"));
