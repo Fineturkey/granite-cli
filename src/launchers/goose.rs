@@ -21,7 +21,7 @@ use crate::capabilities::{
     AgentModelBinding, ApiType, Binding, BindingType, McpBinding, ResolvedCapability,
 };
 use crate::launchers::base::{EnvBinding, LaunchContext, Launcher, LauncherMetadata, run_command};
-use crate::launchers::shared::mcp_cli::mcp_binding_request;
+use crate::launchers::shared::mcp_cli::{STDIO_AND_HTTP, mcp_binding_request};
 use crate::registry::{ConfigConstructable, ConstructError};
 use crate::utils::resolve_shell_command;
 use crate::utils::ui::Ui;
@@ -89,7 +89,7 @@ impl Launcher for GooseLauncher {
         }
 
         if capability_types.contains(&BindingType::Mcp) {
-            let binding = capability.bind(mcp_binding_request()).await?;
+            let binding = capability.bind(mcp_binding_request(STDIO_AND_HTTP)).await?;
             match binding {
                 Binding::Mcp(binding) => {
                     self.bound_mcp_bindings

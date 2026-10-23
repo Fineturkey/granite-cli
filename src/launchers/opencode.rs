@@ -26,7 +26,7 @@ use crate::capabilities::{
     SubAgentBinding, ToolName,
 };
 use crate::launchers::base::{EnvBinding, LaunchContext, Launcher, LauncherMetadata, run_command};
-use crate::launchers::shared::mcp_cli::mcp_binding_request;
+use crate::launchers::shared::mcp_cli::{STDIO_HTTP_AND_SSE, mcp_binding_request};
 use crate::providers::ApiType;
 use crate::proxy::ProxyHandle;
 use crate::registry::{ConfigConstructable, ConstructError};
@@ -115,7 +115,9 @@ impl Launcher for OpenCodeLauncher {
         }
 
         if capability_types.contains(&BindingType::Mcp) {
-            let binding = capability.bind(mcp_binding_request()).await?;
+            let binding = capability
+                .bind(mcp_binding_request(STDIO_HTTP_AND_SSE))
+                .await?;
             match binding {
                 Binding::Mcp(binding) => {
                     self.bound_mcp_bindings

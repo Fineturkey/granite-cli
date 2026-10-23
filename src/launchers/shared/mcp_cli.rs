@@ -10,12 +10,25 @@ use anyhow::Context;
 use std::collections::HashSet;
 use std::path::Path;
 
-/// Request built by launchers that register MCP servers via the downstream
-/// tool's own CLI: they can either hand it a stdio command (which the tool
-/// spawns itself whenever it starts the server) or a Streamable HTTP URL.
-pub(crate) fn mcp_binding_request() -> BindingRequest {
+/// Transports a launcher that can hand the downstream tool a stdio command
+/// or a Streamable HTTP URL, but has not been confirmed to speak SSE.
+pub(crate) const STDIO_AND_HTTP: &[McpTransportKind] =
+    &[McpTransportKind::Stdio, McpTransportKind::Http];
+
+/// Transports for launchers whose downstream tool also takes SSE servers.
+pub(crate) const STDIO_HTTP_AND_SSE: &[McpTransportKind] = &[
+    McpTransportKind::Stdio,
+    McpTransportKind::Http,
+    McpTransportKind::Sse,
+];
+
+/// Request built by launchers to bind MCP servers: `transports` is exactly
+/// what that launcher can register with its downstream tool, so a capability
+/// holding a server it cannot register fails with a clear error instead of
+/// being mis-registered.
+pub(crate) fn mcp_binding_request(transports: &[McpTransportKind]) -> BindingRequest {
     BindingRequest::Mcp(McpBindingRequest {
-        supported_transports: HashSet::from([McpTransportKind::Stdio, McpTransportKind::Http]),
+        supported_transports: transports.iter().copied().collect::<HashSet<_>>(),
     })
 }
 
@@ -91,4 +104,34 @@ fn run_mcp_cli(
         status
     );
     Ok(())
+}
+
+/*-- tests -----------------------------------------------------------------------*/
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn offered(transports: &[McpTransportKind]) -> HashSet<McpTransportKind> {
+        match mcp_binding_request(transports) {
+            BindingRequest::Mcp(request) => request.supported_transports,
+            other => panic!("expected an Mcp request, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn request_offers_exactly_the_given_transports() {
+        assert_eq!(
+            offered(STDIO_AND_HTTP),
+            HashSet::from([McpTransportKind::Stdio, McpTransportKind::Http])
+        );
+        assert_eq!(
+            offered(STDIO_HTTP_AND_SSE),
+            HashSet::from([
+                McpTransportKind::Stdio,
+                McpTransportKind::Http,
+                McpTransportKind::Sse
+            ])
+        );
+    }
 }
