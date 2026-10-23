@@ -152,6 +152,10 @@ impl crate::capabilities::CapabilityInfo for ResolvedVisionMCPCapability {
     fn binding_types(&self) -> HashSet<BindingType> {
         crate::capabilities::CapabilityInfo::binding_types(&self.inner)
     }
+
+    fn mcp_transport(&self) -> Option<McpTransportKind> {
+        Some(McpTransportKind::Http)
+    }
 }
 
 impl Capability for VisionMCPCapability {

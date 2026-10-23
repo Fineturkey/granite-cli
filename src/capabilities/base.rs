@@ -407,6 +407,14 @@ pub trait CapabilityInfo: crate::registry::Named + Send + Sync {
 
     /// Which binding surfaces this capability instance can fill.
     fn binding_types(&self) -> HashSet<BindingType>;
+
+    /// The one wire transport this instance's MCP binding uses, for a
+    /// capability that fills `BindingType::Mcp` and whose configuration fixes
+    /// it. Lets a launcher be checked against the instance before anything is
+    /// bound. `None` means no MCP binding, or one that adapts to the request.
+    fn mcp_transport(&self) -> Option<McpTransportKind> {
+        None
+    }
 }
 
 /// A capability as constructed: it holds the names its configuration gave it
