@@ -173,6 +173,7 @@ impl HasPiLauncherMetadata for PiLauncher {
             description: "Pi terminal coding agent harness".to_string(),
             default_command: "pi".to_string(),
             supported_capabilities: HashSet::from([BindingType::AgentModel]),
+            mcp_transports: HashSet::new(),
             tags: vec!["pi".to_string(), "coding-agent".to_string()],
         }
     }

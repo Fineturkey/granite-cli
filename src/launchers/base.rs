@@ -401,6 +401,11 @@ pub struct LauncherMetadata {
     pub default_command: String,
     /// Binding surfaces this launcher type can make use of.
     pub supported_capabilities: HashSet<BindingType>,
+    /// MCP transports this launcher can register with its downstream tool.
+    /// Empty for launchers that do not support `BindingType::Mcp`. Its
+    /// `bind_capability` builds the MCP binding request from this field, and
+    /// enable-time validation reads it, so the two cannot disagree.
+    pub mcp_transports: HashSet<crate::capabilities::McpTransportKind>,
     pub tags: Vec<String>,
 }
 
@@ -450,6 +455,49 @@ pub struct EnvBinding {
 }
 
 /*-- resolve, then bind -------------------------------------------------------*/
+
+/// Why a launcher of this type cannot carry `capability`'s MCP server, or
+/// `None` when it can (or when the capability does not fix a transport, or
+/// the launcher takes no MCP bindings at all, which binding types already
+/// cover). Both enable-time listing and config validation call this, and
+/// `bind_capability` builds its request from the same `mcp_transports`, so
+/// what is accepted here is what binds.
+pub(crate) fn mcp_transport_conflict<C>(
+    launcher: &LauncherMetadata,
+    capability: &C,
+) -> Option<McpTransportConflict>
+where
+    C: crate::capabilities::CapabilityInfo + ?Sized,
+{
+    if !launcher
+        .supported_capabilities
+        .contains(&crate::capabilities::BindingType::Mcp)
+    {
+        return None;
+    }
+    let transport = capability.mcp_transport()?;
+    if launcher.mcp_transports.contains(&transport) {
+        return None;
+    }
+    let mut offered: Vec<String> = launcher
+        .mcp_transports
+        .iter()
+        .map(|t| format!("{t:?}"))
+        .collect();
+    offered.sort();
+    Some(McpTransportConflict {
+        transport: format!("{transport:?}"),
+        offered,
+    })
+}
+
+/// A capability's MCP transport that a launcher type cannot register.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct McpTransportConflict {
+    pub(crate) transport: String,
+    /// What the launcher can register, sorted.
+    pub(crate) offered: Vec<String>,
+}
 
 /// Resolves every capability a launcher enables, and only then binds them.
 ///
@@ -570,6 +618,7 @@ pub(crate) mod tests {
                 description: "Test double".to_string(),
                 default_command: "fake-binary-that-does-not-exist".to_string(),
                 supported_capabilities: HashSet::new(),
+                mcp_transports: HashSet::new(),
                 tags: vec![],
             }
         }
@@ -667,6 +716,7 @@ pub(crate) mod tests {
             description: "A test launcher".to_string(),
             default_command: "test".to_string(),
             supported_capabilities: HashSet::new(),
+            mcp_transports: HashSet::new(),
             tags: vec![],
         };
         assert_eq!(meta.to_string(), "A test launcher");
@@ -679,6 +729,7 @@ pub(crate) mod tests {
             description: "Anthropic's Claude Code CLI".to_string(),
             default_command: "claude".to_string(),
             supported_capabilities: HashSet::new(),
+            mcp_transports: HashSet::new(),
             tags: vec!["claude".to_string(), "anthropic".to_string()],
         };
         let fields = meta.search_fields();
@@ -811,5 +862,96 @@ pub(crate) mod tests {
 
         assert_eq!(resolved.len(), 2);
         assert_eq!(*launcher.bound.lock().unwrap(), enabled);
+    }
+
+    // -- mcp_transport_conflict ---------------------------------------------
+
+    use crate::capabilities::{BindingType, CapabilityInfo, McpTransportKind};
+
+    struct FixedTransport(Option<McpTransportKind>);
+
+    impl crate::registry::Named for FixedTransport {
+        fn instance_id(&self) -> &str {
+            "fixed"
+        }
+    }
+
+    impl CapabilityInfo for FixedTransport {
+        fn name(&self) -> &str {
+            "fixed"
+        }
+        fn description(&self) -> &str {
+            "fixed"
+        }
+        fn binding_types(&self) -> HashSet<BindingType> {
+            HashSet::from([BindingType::Mcp])
+        }
+        fn mcp_transport(&self) -> Option<McpTransportKind> {
+            self.0
+        }
+    }
+
+    fn launcher_meta(
+        binding_types: &[BindingType],
+        transports: &[McpTransportKind],
+    ) -> LauncherMetadata {
+        LauncherMetadata {
+            name: "t".to_string(),
+            description: "t".to_string(),
+            default_command: "t".to_string(),
+            supported_capabilities: binding_types.iter().copied().collect(),
+            mcp_transports: transports.iter().copied().collect(),
+            tags: vec![],
+        }
+    }
+
+    #[test]
+    fn conflict_names_the_transport_and_what_the_launcher_offers() {
+        let launcher = launcher_meta(
+            &[BindingType::Mcp],
+            &[McpTransportKind::Stdio, McpTransportKind::Http],
+        );
+        let conflict =
+            mcp_transport_conflict(&launcher, &FixedTransport(Some(McpTransportKind::Sse)))
+                .expect("SSE is not offered");
+        assert_eq!(conflict.transport, "Sse");
+        assert_eq!(conflict.offered, ["Http", "Stdio"]);
+    }
+
+    #[test]
+    fn no_conflict_when_the_transport_is_offered() {
+        let launcher = launcher_meta(&[BindingType::Mcp], &[McpTransportKind::Sse]);
+        assert!(
+            mcp_transport_conflict(&launcher, &FixedTransport(Some(McpTransportKind::Sse)))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn no_conflict_when_the_capability_fixes_no_transport() {
+        let launcher = launcher_meta(&[BindingType::Mcp], &[McpTransportKind::Http]);
+        assert!(mcp_transport_conflict(&launcher, &FixedTransport(None)).is_none());
+    }
+
+    #[test]
+    fn no_conflict_when_the_launcher_takes_no_mcp_bindings() {
+        // Binding types already exclude it; this check must not add a second,
+        // misleading reason.
+        let launcher = launcher_meta(&[BindingType::AgentModel], &[]);
+        assert!(
+            mcp_transport_conflict(&launcher, &FixedTransport(Some(McpTransportKind::Sse)))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn every_launcher_declares_transports_exactly_when_it_supports_mcp() {
+        for (name, meta) in crate::launchers::LAUNCHER_REGISTRY.entries() {
+            assert_eq!(
+                meta.supported_capabilities.contains(&BindingType::Mcp),
+                !meta.mcp_transports.is_empty(),
+                "launcher '{name}': mcp_transports must be non-empty iff it supports Mcp"
+            );
+        }
     }
 }
