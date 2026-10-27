@@ -24,27 +24,27 @@ macro_rules! declare_sub_agent_basic {
         $known_type:expr
     ) => {
         #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema, Validate)]
-        pub struct $config_struct {
+        pub(crate) struct $config_struct {
             /// Key into the configured models map (the user-chosen instance ID) for
             /// the model this sub-agent runs on.
             #[validate(min_length = 1, message = "no model is selected")]
-            pub model_id: String,
+            pub(crate) model_id: String,
         }
 
-        pub struct $name_struct {
+        pub(crate) struct $name_struct {
             instance_id: String,
             config: $config_struct,
             /// Description shown to the parent agent for deciding when to delegate.
-            pub description: String,
+            pub(crate) description: String,
             /// Static prompt for this sub-agent.
-            pub prompt: String,
+            pub(crate) prompt: String,
             /// Static tool allow-list for this sub-agent.
-            pub tools: Vec<$crate::capabilities::base::ToolName>,
+            pub(crate) tools: Vec<$crate::capabilities::base::ToolName>,
         }
 
         $crate::paste::paste! {
             #[doc = concat!("[`", stringify!($name_struct), "`] with the model its `model_id` names. Built only by `resolve_refs`, so holding one is what says the name resolved and the model meets what this capability's metadata requires of it.")]
-            pub struct [<Resolved $name_struct>] {
+            pub(crate) struct [<Resolved $name_struct>] {
                 inner: $name_struct,
                 configured_model: $crate::models::ConfiguredModel,
             }
@@ -208,33 +208,33 @@ macro_rules! declare_sub_agent_full {
         {$($config_fields:tt)*}
     ) => {
         #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema, Validate)]
-        pub struct $config_struct {
+        pub(crate) struct $config_struct {
             /// Shown to the main agent so it can decide when to delegate to this
             /// sub-agent -- the same role Claude Code's own subagent `description`
             /// field plays.
             #[validate(min_length = 1, message = "the description is empty")]
-            pub description: String,
+            pub(crate) description: String,
             /// Key into the configured models map (the user-chosen instance ID) for
             /// the model this sub-agent runs on.
             #[validate(min_length = 1, message = "no model is selected")]
-            pub model_id: String,
+            pub(crate) model_id: String,
             $($config_fields)*
         }
 
-        pub struct $name_struct {
+        pub(crate) struct $name_struct {
             instance_id: String,
             config: $config_struct,
             /// Description shown to the parent agent for deciding when to delegate.
-            pub description: String,
+            pub(crate) description: String,
             /// Configurable prompt for this sub-agent.
-            pub prompt: String,
+            pub(crate) prompt: String,
             /// Configurable tool allow-list for this sub-agent.
-            pub tools: Vec<$crate::capabilities::base::ToolName>,
+            pub(crate) tools: Vec<$crate::capabilities::base::ToolName>,
         }
 
         $crate::paste::paste! {
             #[doc = concat!("[`", stringify!($name_struct), "`] with the model its `model_id` names. Built only by `resolve_refs`, so holding one is what says the name resolved and the model meets what this capability's metadata requires of it.")]
-            pub struct [<Resolved $name_struct>] {
+            pub(crate) struct [<Resolved $name_struct>] {
                 inner: $name_struct,
                 configured_model: $crate::models::ConfiguredModel,
             }
@@ -397,10 +397,10 @@ declare_sub_agent_full!(
     {
         /// The sub-agent's system prompt.
         #[validate(min_length = 1, message = "the prompt is empty")]
-        pub prompt: String,
+        pub(crate) prompt: String,
         /// Tool allow-list. Empty (the default) means "inherit all tools."
         #[serde(default)]
-        pub tools: Vec<crate::capabilities::base::ToolName>,
+        pub(crate) tools: Vec<crate::capabilities::base::ToolName>,
     }
 );
 

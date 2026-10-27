@@ -6,10 +6,10 @@ use crate::config::validation::RefKind;
 use crate::providers::{HealthStatus, PROVIDER_REGISTRY};
 use crate::utils::prompt_from_schema;
 
-pub struct ProviderCommands;
+pub(crate) struct ProviderCommands;
 
 impl ProviderCommands {
-    pub fn catalog(ctx: &crate::AppContext, wide: bool) -> Result<()> {
+    pub(crate) fn catalog(ctx: &crate::AppContext, wide: bool) -> Result<()> {
         let providers = PROVIDER_REGISTRY.entries();
 
         let mut rows: Vec<Vec<String>> = providers
@@ -76,7 +76,7 @@ impl ProviderCommands {
         Ok(())
     }
 
-    pub fn list(ctx: &crate::AppContext) -> Result<()> {
+    pub(crate) fn list(ctx: &crate::AppContext) -> Result<()> {
         let notes = crate::commands::shared::remediation::dangling_notes(ctx, RefKind::Provider);
         let mut rows: Vec<Vec<String>> = ctx
             .config()
@@ -113,7 +113,7 @@ impl ProviderCommands {
         Ok(())
     }
 
-    pub fn info(ctx: &crate::AppContext, id: &str) -> Result<()> {
+    pub(crate) fn info(ctx: &crate::AppContext, id: &str) -> Result<()> {
         let configured = ctx.config().get_provider(id);
 
         let metadata = configured
@@ -205,7 +205,7 @@ impl ProviderCommands {
     /// (e.g. `openai-compatible` backing `llama-cpp`, `ollama`, `lm-studio`).
     /// `force_overwrite` skips the "already configured, overwrite?" prompt,
     /// for callers that have already obtained confirmation (e.g. remediation).
-    pub async fn setup(
+    pub(crate) async fn setup(
         ctx: &mut crate::AppContext,
         provider_type: &str,
         instance_id: Option<&str>,
@@ -321,7 +321,10 @@ impl ProviderCommands {
     }
 
     /// Check health of a provider or all configured providers.
-    pub async fn health(ctx: &mut crate::AppContext, provider_id: Option<&str>) -> Result<()> {
+    pub(crate) async fn health(
+        ctx: &mut crate::AppContext,
+        provider_id: Option<&str>,
+    ) -> Result<()> {
         let providers_to_check: Vec<String> = match provider_id {
             Some(id) => vec![id.to_string()],
             None => ctx.config().providers.keys().cloned().collect(),
@@ -359,7 +362,7 @@ impl ProviderCommands {
     /// `policy` controls what happens to dependents: `Cascade` removes them
     /// too, `Refuse` aborts, `Leave` strands them. `None` asks interactively
     /// or leaves in non-interactive sessions.
-    pub fn remove(
+    pub(crate) fn remove(
         ctx: &mut crate::AppContext,
         provider_id: &str,
         policy: Option<crate::commands::shared::remediation::DependentsPolicy>,

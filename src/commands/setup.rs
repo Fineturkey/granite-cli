@@ -25,7 +25,7 @@ use_channel!("SETUP");
 /*-- public --*/
 
 /// A single recommendation produced during discovery.
-pub enum Recommendation {
+enum Recommendation {
     Provider {
         provider_type: &'static str,
         provider_name: String,
@@ -54,17 +54,17 @@ pub enum Recommendation {
 }
 
 /// The complete output of the discovery engine.
-pub struct DiscoveryResult {
-    pub recommendations: Vec<Recommendation>,
+struct DiscoveryResult {
+    pub(crate) recommendations: Vec<Recommendation>,
     /// Every unconfigured model with at least a partial hardware fit, one
     /// entry per catalog model_id (not deduplicated by family/version like
     /// `recommendations` is). Used by the "choose different models" escape
     /// hatch so a user can see and pick models that don't fully fit.
-    pub all_model_candidates: Vec<Recommendation>,
-    pub configured_provider_ids: Vec<String>,
-    pub configured_model_ids: Vec<String>,
-    pub configured_launcher_ids: Vec<String>,
-    pub configured_capability_ids: Vec<String>,
+    all_model_candidates: Vec<Recommendation>,
+    configured_provider_ids: Vec<String>,
+    configured_model_ids: Vec<String>,
+    configured_launcher_ids: Vec<String>,
+    configured_capability_ids: Vec<String>,
 }
 
 /*-- private --*/
@@ -1168,13 +1168,17 @@ fn admits_for_recommendation(req: &ModelRequirement, md: &ModelMetadata) -> bool
 
 /*-- SetupCommands -----------------------------------------------------------*/
 
-pub struct SetupCommands;
+pub(crate) struct SetupCommands;
 
 impl SetupCommands {
     /// Entry point for `granite-cli setup`.
     /// `pull`: `Some(true)` => pull without prompting, `Some(false)` => skip
     /// pull, `None` => prompt in interactive mode / no pull in auto mode.
-    pub async fn run(ctx: &mut crate::AppContext, auto: bool, pull: Option<bool>) -> Result<()> {
+    pub(crate) async fn run(
+        ctx: &mut crate::AppContext,
+        auto: bool,
+        pull: Option<bool>,
+    ) -> Result<()> {
         if auto {
             Self::run_auto(ctx, pull).await
         } else {

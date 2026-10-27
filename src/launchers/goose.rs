@@ -31,13 +31,13 @@ use_channel!("GOOSE");
 /*-- public --*/
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct GooseLauncherConfig {
+pub(crate) struct GooseLauncherConfig {
     /// Override path to the `goose` binary for non-PATH installs.
     #[serde(default)]
-    pub command_path: Option<String>,
+    pub(crate) command_path: Option<String>,
 }
 
-pub struct GooseLauncher {
+pub(crate) struct GooseLauncher {
     instance_id: String,
     config: GooseLauncherConfig,
     bound_binding: Option<AgentModelBinding>,

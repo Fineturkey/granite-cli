@@ -21,7 +21,7 @@ use_channel!("BOB");
 /// This function is intentionally panic-free and error-free: any failure
 /// (missing file, corrupt DB, malformed JSON, etc.) degrades gracefully so
 /// the launcher can continue even with zero usage data.
-pub fn collect_bob_usage(db_path: &Path, root_task_id: &str) -> UsageStats {
+pub(crate) fn collect_bob_usage(db_path: &Path, root_task_id: &str) -> UsageStats {
     // Attempt to open the DB read-only.  If we can't, return default.
     let conn = match Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
         Ok(c) => c,

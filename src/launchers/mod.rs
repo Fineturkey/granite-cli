@@ -9,7 +9,7 @@ use_channel!("LNCHR");
 
 /*-- public --*/
 
-pub static LAUNCHER_REGISTRY: LazyLock<base::LauncherFactory> = LazyLock::new(|| {
+pub(crate) static LAUNCHER_REGISTRY: LazyLock<base::LauncherFactory> = LazyLock::new(|| {
     let mut factory = base::LauncherFactory::new();
     factory.register::<claude::ClaudeLauncher>("claude");
     factory.register::<bob::BobLauncher>("bob");
@@ -29,7 +29,7 @@ pub static LAUNCHER_REGISTRY: LazyLock<base::LauncherFactory> = LazyLock::new(||
 /// multiple named instances of one catalog type coexist (e.g. `claude-local`
 /// and `claude-enterprise` both backed by `claude`). The instance is kept, so
 /// every later ask for that id returns the same object.
-pub struct LauncherSource {
+pub(crate) struct LauncherSource {
     /// The settings for this kind, from the configuration snapshot the
     /// source was built from.
     configs: HashMap<String, crate::config::LauncherConfig>,
@@ -37,7 +37,7 @@ pub struct LauncherSource {
 }
 
 impl LauncherSource {
-    pub fn from_config(config: &crate::config::Config) -> Self {
+    pub(crate) fn from_config(config: &crate::config::Config) -> Self {
         Self {
             configs: config.launchers.clone(),
             cache: std::sync::Mutex::new(HashMap::new()),
@@ -48,7 +48,7 @@ impl LauncherSource {
     /// and returned from the cache on every one after it. Errors when no
     /// entry is configured under that id, or when its `launcher_type` is not
     /// in the registry.
-    pub fn get(&self, launcher_id: &str) -> anyhow::Result<std::sync::Arc<dyn Launcher>> {
+    pub(crate) fn get(&self, launcher_id: &str) -> anyhow::Result<std::sync::Arc<dyn Launcher>> {
         self.build(launcher_id)
             .map_err(|e| e.about("launcher", launcher_id))
     }
@@ -108,23 +108,23 @@ impl crate::dependency::Configured<dyn Launcher> for LauncherSource {
 /*-- Module Declarations -----------------------------------------------------*/
 
 mod base;
-pub mod bob;
-pub mod claude;
-pub mod goose;
-pub mod hermes;
-pub mod openclaw;
-pub mod opencode;
-pub mod pi;
+pub(crate) mod bob;
+pub(crate) mod claude;
+mod goose;
+pub(crate) mod hermes;
+mod openclaw;
+pub(crate) mod opencode;
+pub(crate) mod pi;
 
 pub(crate) use base::resolve_and_bind;
-pub use base::{EnvBinding, LaunchContext, Launcher, LauncherMetadata};
-pub use bob::{BobLauncher, BobLauncherConfig};
-pub use claude::{ClaudeLauncher, ClaudeLauncherConfig};
-pub use goose::{GooseLauncher, GooseLauncherConfig};
-pub use hermes::{HermesLauncher, HermesLauncherConfig};
-pub use openclaw::{OpenClawLauncher, OpenClawLauncherConfig};
-pub use opencode::{OpenCodeLauncher, OpenCodeLauncherConfig};
-pub use pi::{PiLauncher, PiLauncherConfig};
+pub(crate) use base::{EnvBinding, LaunchContext, Launcher, LauncherMetadata};
+pub(crate) use bob::{BobLauncher, BobLauncherConfig};
+pub(crate) use claude::{ClaudeLauncher, ClaudeLauncherConfig};
+pub(crate) use goose::{GooseLauncher, GooseLauncherConfig};
+pub(crate) use hermes::{HermesLauncher, HermesLauncherConfig};
+pub(crate) use openclaw::{OpenClawLauncher, OpenClawLauncherConfig};
+pub(crate) use opencode::{OpenCodeLauncher, OpenCodeLauncherConfig};
+pub(crate) use pi::{PiLauncher, PiLauncherConfig};
 
 /*-- private shared modules --*/
 

@@ -155,7 +155,7 @@ fn delegate_tool_input_schema() -> serde_json::Map<String, serde_json::Value> {
 /// trait method's `&self` / `+ '_` lifetime by cloning `self` into an owned
 /// `async move` block.
 #[derive(Clone)]
-pub(crate) struct DelegateToolRegistry {
+struct DelegateToolRegistry {
     pi_binary: Arc<PathBuf>,
     agents: Arc<Vec<DelegateSubAgent>>,
 }

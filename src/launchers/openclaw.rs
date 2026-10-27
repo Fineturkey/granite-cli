@@ -25,13 +25,13 @@ use std::path::{Path, PathBuf};
 /*-- public --*/
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct OpenClawLauncherConfig {
+pub(crate) struct OpenClawLauncherConfig {
     /// Override path to the `openclaw` binary for non-PATH installs.
     #[serde(default)]
-    pub command_path: Option<String>,
+    pub(crate) command_path: Option<String>,
 }
 
-pub struct OpenClawLauncher {
+pub(crate) struct OpenClawLauncher {
     instance_id: String,
     config: OpenClawLauncherConfig,
     bound_binding: Option<AgentModelBinding>,

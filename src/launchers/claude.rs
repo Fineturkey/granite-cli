@@ -25,14 +25,14 @@ use_channel!("CLAUD");
 /*-- public --*/
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct ClaudeLauncherConfig {
+pub(crate) struct ClaudeLauncherConfig {
     /// Override path to the `claude` binary for non-PATH installs.
     /// Leave unset to use PATH lookup.
     #[serde(default)]
-    pub command_path: Option<String>,
+    pub(crate) command_path: Option<String>,
 }
 
-pub struct ClaudeLauncher {
+pub(crate) struct ClaudeLauncher {
     instance_id: String,
     config: ClaudeLauncherConfig,
     bound_agent_model: Option<crate::capabilities::AgentModelBinding>,

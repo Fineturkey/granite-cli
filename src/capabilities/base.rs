@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 // Canonical launch-time types live in `launchers::base` -- re-exported here so
 // capabilities and launchers share one `LaunchContext`/`EnvBinding` pair.
-pub use crate::launchers::{EnvBinding, LaunchContext};
+pub(crate) use crate::launchers::{EnvBinding, LaunchContext};
 
 /*-- invalid settings ---------------------------------------------------------*/
 
@@ -68,7 +68,7 @@ macro_rules! define_bindings {
         /// hashable so a `Launcher` can declare `HashSet<BindingType>` for
         /// the surfaces it knows how to consume.
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-        pub enum BindingType {
+        pub(crate) enum BindingType {
             $($variant),+
         }
 
@@ -84,12 +84,12 @@ macro_rules! define_bindings {
         /// binding surface, parameterized by whatever detail that surface
         /// needs (e.g. which `ApiType` the launcher's environment expects).
         #[derive(Debug, Clone)]
-        pub enum BindingRequest {
+        pub(crate) enum BindingRequest {
             $($variant($request_ty)),+
         }
 
         impl BindingRequest {
-            pub fn binding_type(&self) -> BindingType {
+            pub(crate) fn binding_type(&self) -> BindingType {
                 match self {
                     $(BindingRequest::$variant(_) => BindingType::$variant,)+
                 }
@@ -98,12 +98,12 @@ macro_rules! define_bindings {
 
         /// The result of a successful `Capability::bind` call.
         #[derive(Debug, Clone, Serialize, Deserialize)]
-        pub enum Binding {
+        pub(crate) enum Binding {
             $($variant($result_ty)),+
         }
 
         impl Binding {
-            pub fn binding_type(&self) -> BindingType {
+            pub(crate) fn binding_type(&self) -> BindingType {
                 match self {
                     $(Binding::$variant(_) => BindingType::$variant,)+
                 }
@@ -115,35 +115,35 @@ macro_rules! define_bindings {
 /// Request payload for `BindingType::AgentModel` -- which `ApiType` the
 /// launcher's environment expects.
 #[derive(Debug, Clone)]
-pub struct AgentModelBindingRequest {
-    pub api_type: ApiType,
+pub(crate) struct AgentModelBindingRequest {
+    pub(crate) api_type: ApiType,
 }
 
 /// Result payload for `BindingType::AgentModel`: a configured model's
 /// connection details.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentModelBinding {
-    pub api_type: ApiType,
+pub(crate) struct AgentModelBinding {
+    pub(crate) api_type: ApiType,
     /// Configured name of the provider instance serving this model (e.g.
     /// `my-ollama`). Launchers that must name the endpoint in the wrapped tool's
     /// own config use this rather than inventing a name of their own.
-    pub provider_name: String,
-    pub base_url: String,
-    pub model_name: String,
-    pub endpoint_path: String,
-    pub api_key: Option<Secret>,
-    pub verify_ssl: bool,
-    pub context_length: Option<u64>,
+    pub(crate) provider_name: String,
+    pub(crate) base_url: String,
+    pub(crate) model_name: String,
+    pub(crate) endpoint_path: String,
+    pub(crate) api_key: Option<Secret>,
+    pub(crate) verify_ssl: bool,
+    pub(crate) context_length: Option<u64>,
     /// Custom headers to be sent with each request to the provider.
-    pub custom_headers: Option<HashMap<String, Secret>>,
+    pub(crate) custom_headers: Option<HashMap<String, Secret>>,
 }
 
 /// Request payload for `BindingType::SubAgent` -- which `ApiType` the
 /// launcher wants the sub-agent's model to speak (mirrors
 /// `AgentModelBindingRequest`).
 #[derive(Debug, Clone)]
-pub struct SubAgentBindingRequest {
-    pub api_type: ApiType,
+pub(crate) struct SubAgentBindingRequest {
+    pub(crate) api_type: ApiType,
 }
 
 /// Launcher-agnostic tool-name concept for `SubAgentBinding.tools` /
@@ -157,7 +157,7 @@ pub struct SubAgentBindingRequest {
 /// sub-agent capabilities (e.g. "Explore," "Research") are added rather
 /// than trying to be exhaustive now.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub enum ToolName {
+pub(crate) enum ToolName {
     FileRead,
     FileWrite,
     FileEdit,
@@ -185,7 +185,7 @@ pub enum ToolName {
 /// Launcher-agnostic enum for well-known sub-agents that launchers may want to
 /// treat in a special way.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub enum KnownSubAgent {
+pub(crate) enum KnownSubAgent {
     Explore,
     Plan,
     Code,
@@ -196,15 +196,15 @@ pub enum KnownSubAgent {
 /// on. Reuses `AgentModelBinding` by composition for the connection details
 /// rather than duplicating those fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubAgentBinding {
-    pub description: String,
-    pub prompt: String,
+pub(crate) struct SubAgentBinding {
+    pub(crate) description: String,
+    pub(crate) prompt: String,
     /// Tool allow-list. Empty means "inherit all tools" -- callers should
     /// omit rather than send an empty list where the downstream tool
     /// distinguishes the two.
-    pub tools: Vec<ToolName>,
-    pub model: AgentModelBinding,
-    pub known_type: Option<KnownSubAgent>,
+    pub(crate) tools: Vec<ToolName>,
+    pub(crate) model: AgentModelBinding,
+    pub(crate) known_type: Option<KnownSubAgent>,
 }
 
 /// Which wire transport an MCP server binding uses. Payload-free and
@@ -212,7 +212,7 @@ pub struct SubAgentBinding {
 /// (per `McpBindingRequest::supported_transports`) and a `Capability` can
 /// pick the best one it's able to serve.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum McpTransportKind {
+pub(crate) enum McpTransportKind {
     Stdio,
     Http,
     Sse,
@@ -222,8 +222,8 @@ pub enum McpTransportKind {
 /// can actually register with the downstream tool. `bind()` picks the best
 /// transport it can serve from this set.
 #[derive(Debug, Clone)]
-pub struct McpBindingRequest {
-    pub supported_transports: HashSet<McpTransportKind>,
+pub(crate) struct McpBindingRequest {
+    pub(crate) supported_transports: HashSet<McpTransportKind>,
 }
 
 /// Result payload for `BindingType::Mcp`: enough detail for a launcher to
@@ -233,7 +233,7 @@ pub struct McpBindingRequest {
 /// serialize this almost directly into its own `mcp add-json`/config-file
 /// format.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum McpBinding {
+pub(crate) enum McpBinding {
     Stdio {
         command: String,
         args: Vec<String>,
@@ -278,7 +278,7 @@ impl McpBinding {
     /// others' `mcp add-json` (see
     /// modelcontextprotocol/modelcontextprotocol#292): `{"type":
     /// "stdio"|"http"|"sse", ...}`.
-    pub fn to_canonical_json(&self) -> serde_json::Value {
+    pub(crate) fn to_canonical_json(&self) -> serde_json::Value {
         let mut map = serde_json::Map::new();
         match self {
             McpBinding::Stdio {
@@ -330,7 +330,7 @@ impl McpBinding {
 /// have been resolved. Shared by [`Capability`] and [`ResolvedCapability`] so
 /// a list of configured capabilities reads the same either side of
 /// resolution.
-pub trait CapabilityInfo: crate::registry::Named + Send + Sync {
+pub(crate) trait CapabilityInfo: crate::registry::Named + Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
 
@@ -343,7 +343,7 @@ pub trait CapabilityInfo: crate::registry::Named + Send + Sync {
 /// thing it can do.
 ///
 /// All capabilities must implement this trait along with ConfigConstructable.
-pub trait Capability: CapabilityInfo {
+pub(crate) trait Capability: CapabilityInfo {
     /// Turn the names this capability holds into the objects they refer to,
     /// consuming the unresolved capability and returning the form that binds.
     /// A capability that names nothing returns itself.
@@ -362,7 +362,7 @@ pub trait Capability: CapabilityInfo {
 /// unresolved capability cannot reach them: the only way to obtain one of
 /// these is [`Capability::resolve_refs`], which returns it only on success.
 #[async_trait]
-pub trait ResolvedCapability: CapabilityInfo {
+pub(crate) trait ResolvedCapability: CapabilityInfo {
     /// Resolve a `BindingRequest` into a concrete `Binding`.
     async fn bind(&self, request: BindingRequest) -> anyhow::Result<Binding>;
 
@@ -392,15 +392,15 @@ impl crate::dependency::Catalogued for dyn ResolvedCapability {
 
 /// Metadata describing a capability implementation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CapabilityMetadata {
-    pub name: String,
-    pub description: String,
-    pub dependencies: Vec<Dependency>,
-    pub tags: Vec<String>,
+pub(crate) struct CapabilityMetadata {
+    pub(crate) name: String,
+    pub(crate) description: String,
+    pub(crate) dependencies: Vec<Dependency>,
+    pub(crate) tags: Vec<String>,
     /// Binding surfaces this capability *type* can support (superset); a
     /// concrete instance may choose to support only a subset via
     /// `Capability::binding_types`.
-    pub supported_binding_types: HashSet<BindingType>,
+    pub(crate) supported_binding_types: HashSet<BindingType>,
 }
 
 impl std::fmt::Display for CapabilityMetadata {
@@ -423,7 +423,7 @@ impl Searchable for CapabilityMetadata {
 /// own type declared. The requirement is read from metadata rather than
 /// passed in, so the demand a capability states and the one checked at
 /// resolution cannot drift apart.
-pub fn resolve_declared_model(
+pub(crate) fn resolve_declared_model(
     models: &dyn crate::models::ModelLookup,
     metadata: &CapabilityMetadata,
     model_id: &str,
@@ -446,7 +446,7 @@ pub fn resolve_declared_model(
 /// holds the resolved id, which is how `config::validation` reads it without
 /// constructing anything.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Dependency {
+pub(crate) enum Dependency {
     Model {
         /// The JSON key in this capability's own config that the resolved
         /// model id is stored under.

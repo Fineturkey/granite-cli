@@ -17,15 +17,15 @@ use std::collections::HashSet;
 /*-- AgentModelCapabilityConfig ---------------------------------------------------*/
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema, Validate)]
-pub struct AgentModelCapabilityConfig {
+pub(crate) struct AgentModelCapabilityConfig {
     /// Key into the configured models map (the user-chosen instance ID).
     #[validate(min_length = 1, message = "no model is selected")]
-    pub model_id: String,
+    pub(crate) model_id: String,
 }
 
 /*-- AgentModelCapability ---------------------------------------------------------*/
 
-pub struct AgentModelCapability {
+pub(crate) struct AgentModelCapability {
     instance_id: String,
     config: AgentModelCapabilityConfig,
 }
@@ -33,7 +33,7 @@ pub struct AgentModelCapability {
 /// [`AgentModelCapability`] with the model its `model_id` names. Built only
 /// by `resolve_refs`, so holding one is what says the name resolved and the
 /// model meets what this capability's metadata requires of it.
-pub struct ResolvedAgentModelCapability {
+struct ResolvedAgentModelCapability {
     inner: AgentModelCapability,
     configured_model: ConfiguredModel,
 }
@@ -70,7 +70,7 @@ impl crate::registry::Named for ResolvedAgentModelCapability {
 }
 
 impl AgentModelCapability {
-    pub fn configured_model_id(&self) -> &str {
+    fn configured_model_id(&self) -> &str {
         &self.config.model_id
     }
 }

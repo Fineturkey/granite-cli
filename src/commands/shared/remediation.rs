@@ -95,7 +95,7 @@ pub(crate) fn prompt_with_current(
 /// is omitted the caller passes `None` and the behaviour falls back to asking
 /// interactively (or leaving dependents stranded in non-interactive sessions).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum DependentsPolicy {
+pub(crate) enum DependentsPolicy {
     /// Remove the target and every dependent automatically, without asking.
     /// Cascades recursively so dependents-of-dependents are taken too.
     Cascade,

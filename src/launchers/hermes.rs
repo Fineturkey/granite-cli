@@ -29,20 +29,20 @@ use std::path::{Path, PathBuf};
 /*-- public --*/
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-pub struct HermesLauncherConfig {
+pub(crate) struct HermesLauncherConfig {
     /// Override path to the `hermes` binary for non-PATH installs.
     /// Leave unset to use PATH lookup.
     #[serde(default)]
-    pub command_path: Option<String>,
+    pub(crate) command_path: Option<String>,
 
     /// Extra keys merged (shallow, last-write-wins) into the generated
     /// hermes config file -- e.g. `model.context_length` or provider-specific
     /// overrides. Necessary because the entry is regenerated on every launch.
     #[serde(default)]
-    pub model_overrides: Option<serde_json::Value>,
+    pub(crate) model_overrides: Option<serde_json::Value>,
 }
 
-pub struct HermesLauncher {
+pub(crate) struct HermesLauncher {
     instance_id: String,
     config: HermesLauncherConfig,
     bound_binding: Option<AgentModelBinding>,

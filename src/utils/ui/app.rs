@@ -115,7 +115,7 @@ impl ModelEntry {
 /*-- public --*/
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Section {
+enum Section {
     Models,
     Providers,
     Launchers,
@@ -164,7 +164,7 @@ impl Section {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum AppMode {
+enum AppMode {
     Browse,
     Search(String),
     Detail(String),
@@ -183,7 +183,7 @@ pub enum AppMode {
 /// Action returned by [`App::handle_key`] to drive the event loop in
 /// [`run_interactive_tui`].
 #[derive(Debug, Clone, PartialEq)]
-pub enum AppAction {
+enum AppAction {
     /// No special action; keep running the TUI.
     None,
     /// User requested quit.
@@ -194,39 +194,39 @@ pub enum AppAction {
     StartSetup(Section, String, Option<String>),
 }
 
-pub struct App {
-    pub ctx: crate::AppContext,
-    pub section: Section,
-    pub row: usize,
-    pub mode: AppMode,
+struct App {
+    pub(crate) ctx: crate::AppContext,
+    section: Section,
+    pub(crate) row: usize,
+    pub(crate) mode: AppMode,
     table_state: TableState,
-    pub detail_scroll: usize,
+    detail_scroll: usize,
     /// Cached once at startup — recomputing this requires `detect_hardware()`
     /// (DXGI/NVML/Metal calls) on every render, which is the main cause of
     /// sluggish arrow-key navigation on Windows.
     recommend_rows_cache: Vec<Vec<String>>,
     /// Active in-pane setup wizard, if one is running.
-    pub setup_pane: Option<SetupPane>,
+    setup_pane: Option<SetupPane>,
     /// Per-section toggle: when true, only rows whose catalog type has at least
     /// one configured instance are shown.  Defaults to true for a section when
     /// it has any configured instances at startup, false otherwise.
     /// Indices: 0=Models, 1=Providers, 2=Launchers, 3=Capabilities.
-    pub configured_only: [bool; 4],
+    configured_only: [bool; 4],
     /// Cached list of session metadata loaded from disk, newest-first.
     /// Reloaded on each idle tick when the Sessions section is active.
-    pub sessions: Vec<crate::session::SessionMeta>,
+    pub(crate) sessions: Vec<crate::session::SessionMeta>,
     /// When true (default), sessions with `finished_at` set are hidden.
-    pub hide_inactive: bool,
+    hide_inactive: bool,
     /// Per-section committed search query (set when Enter is pressed in Search
     /// mode). Kept so Browse mode continues to show filtered results after
     /// the user commits a search — Esc clears the current section's slot.
     /// Indices: 0=Models, 1=Providers, 2=Launchers, 3=Capabilities, 4=Recommend.
     /// Sessions and Hardware are not searchable and have no slot.
-    pub active_search: [String; 5],
+    active_search: [String; 5],
 }
 
 impl App {
-    pub fn new(ctx: crate::AppContext) -> Self {
+    pub(crate) fn new(ctx: crate::AppContext) -> Self {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
         let recommend_rows_cache = {
@@ -268,7 +268,7 @@ impl App {
     }
 
     /// Handle a key event and return an [`AppAction`].
-    pub fn handle_key(&mut self, key: KeyEvent) -> AppAction {
+    pub(crate) fn handle_key(&mut self, key: KeyEvent) -> AppAction {
         // Ctrl-C always quits from any mode
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             return AppAction::Quit;
@@ -455,7 +455,7 @@ impl App {
     }
 
     /// Render the full application layout into the given frame.
-    pub fn render(&mut self, frame: &mut Frame) {
+    pub(crate) fn render(&mut self, frame: &mut Frame) {
         let area = frame.area();
 
         // Outer layout: content + footer
@@ -2354,7 +2354,7 @@ impl App {
 }
 
 /// Launch the interactive TUI application. Runs until the user quits.
-pub async fn run_interactive_tui(ctx: crate::AppContext) -> anyhow::Result<()> {
+pub(crate) async fn run_interactive_tui(ctx: crate::AppContext) -> anyhow::Result<()> {
     // Silence the global logger for the entire TUI session.  The logger is
     // wired to TerminalOutput which calls println! directly — any log line
     // emitted from a setup task thread would write to stdout while ratatui

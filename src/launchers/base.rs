@@ -21,7 +21,7 @@ use_channel!("LNCHR");
 /// Core trait for launcher implementations.
 /// All launchers must implement this trait along with ConfigConstructable.
 #[async_trait]
-pub trait Launcher: crate::registry::Named + Send + Sync {
+pub(crate) trait Launcher: crate::registry::Named + Send + Sync {
     fn name(&self) -> &str;
 
     /// The binary/command this instance will exec.
@@ -394,14 +394,14 @@ pub(crate) async fn run_command_captured(
 
 /// Metadata describing a launcher implementation (type-level, catalog entry).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LauncherMetadata {
-    pub name: String,
-    pub description: String,
+pub(crate) struct LauncherMetadata {
+    pub(crate) name: String,
+    pub(crate) description: String,
     /// The default binary name used for PATH lookup (e.g. `"claude"`, `"bob"`).
-    pub default_command: String,
+    pub(crate) default_command: String,
     /// Binding surfaces this launcher type can make use of.
-    pub supported_capabilities: HashSet<BindingType>,
-    pub tags: Vec<String>,
+    pub(crate) supported_capabilities: HashSet<BindingType>,
+    pub(crate) tags: Vec<String>,
 }
 
 impl std::fmt::Display for LauncherMetadata {
@@ -423,30 +423,30 @@ impl Searchable for LauncherMetadata {
 }
 
 /// Runtime context passed through the launch lifecycle.
-pub struct LaunchContext {
-    pub launcher_id: String,
+pub(crate) struct LaunchContext {
+    pub(crate) launcher_id: String,
     /// The working directory for the spawned subprocess (i.e. the CWD the
     /// tool process will see). Typically set to the user's current directory.
-    pub working_dir: PathBuf,
+    pub(crate) working_dir: PathBuf,
     /// Env vars already resolved (e.g. provider URL, model ID) before any
     /// capability bindings are merged on top.
-    pub base_env: HashMap<String, String>,
+    pub(crate) base_env: HashMap<String, String>,
     /// If true, only display what would be launched without executing.
-    pub dry_run: bool,
+    pub(crate) dry_run: bool,
     /// Shared usage tracker for the session's proxy, if one is running. Lets a
     /// launcher submit self-reported usage that never passes through the proxy
     /// (e.g. Bob, which has no model-configuration capability and so never makes
     /// a request the proxy could intercept).
-    pub usage_tracker: Option<std::sync::Arc<crate::proxy::UsageTracker>>,
+    pub(crate) usage_tracker: Option<std::sync::Arc<crate::proxy::UsageTracker>>,
     /// The session proxy for this launch, when one was started.
-    pub model_proxy: Option<crate::proxy::ProxyHandle>,
+    pub(crate) model_proxy: Option<crate::proxy::ProxyHandle>,
 }
 
 /// A single environment variable binding contributed to the subprocess overlay.
 #[derive(Debug, Clone)]
-pub struct EnvBinding {
-    pub key: String,
-    pub value: String,
+pub(crate) struct EnvBinding {
+    pub(crate) key: String,
+    pub(crate) value: String,
 }
 
 /*-- resolve, then bind -------------------------------------------------------*/
@@ -494,7 +494,7 @@ pub(crate) mod tests {
     use crate::registry::{ConfigConstructable, ConstructError};
 
     /// Minimal Launcher implementation used only in tests.
-    pub(crate) struct FakeLauncher {
+    struct FakeLauncher {
         instance_id: String,
         /// When `Some`, `validate_command` resolves to this path directly.
         command_path: Option<PathBuf>,
