@@ -306,7 +306,7 @@ pub(crate) async fn http_health_check(
 
 /// Model formats that providers can serve.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[allow(non_camel_case_types)]
+#[allow(non_camel_case_types, clippy::upper_case_acronyms)]
 pub(crate) enum ModelFormat {
     Safetensors,
     GGUF,

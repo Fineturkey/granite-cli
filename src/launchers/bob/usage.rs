@@ -4,7 +4,6 @@ use std::path::Path;
 // Third Party
 use alog::{MessageLevel, alog_channel, use_channel};
 use rusqlite::{Connection, OpenFlags, params};
-use serde_json;
 
 // Local
 use crate::proxy::UsageStats;
