@@ -551,6 +551,7 @@ mod tests {
         crate::AppContext::new(Config::default(), Arc::new(CaptureUi::default()))
     }
 
+    #[cfg(unix)]
     fn capture(ctx: &crate::AppContext) -> &CaptureUi {
         (&*ctx.ui as &dyn std::any::Any)
             .downcast_ref::<CaptureUi>()

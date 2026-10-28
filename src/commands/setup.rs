@@ -14,9 +14,7 @@ use crate::commands::provider::ProviderCommands;
 use crate::config::recommended_config;
 use crate::dependency::{Configured, Requirement};
 use crate::launchers::LAUNCHER_REGISTRY;
-use crate::models::{
-    ContextFit, MODEL_REGISTRY, ModelFunction, ModelMetadata, ModelType, ModelVariant,
-};
+use crate::models::{ContextFit, MODEL_REGISTRY, ModelFunction, ModelMetadata, ModelVariant};
 use crate::providers::{HealthStatus, PROVIDER_REGISTRY, Provider};
 use crate::utils::hardware::{HardwareProfile, detect_hardware};
 
@@ -37,7 +35,6 @@ enum Recommendation {
         family: String,
         version: String,
         size: String,
-        model_type: ModelType,
         best_variant: ModelVariant,
         context_fit: ContextFit,
         can_run_by: Vec<String>,
@@ -292,7 +289,6 @@ impl Discover {
             family: md.family.clone(),
             version: md.version.clone(),
             size: format_size(md.size),
-            model_type: md.model_type.clone(),
             best_variant: variant,
             context_fit: fit,
             can_run_by,
@@ -2720,6 +2716,7 @@ impl SetupCommands {
 mod tests {
     use super::*;
     use crate::config::{Config, ModelConfig, ProviderConfig};
+    use crate::models::ModelType;
     use crate::utils::ui::base::tests::CaptureUi;
     use std::sync::Arc;
 
@@ -3307,7 +3304,6 @@ mod tests {
             family: md.family.clone(),
             version: md.version.clone(),
             size: format_size(md.size),
-            model_type: md.model_type.clone(),
             best_variant,
             context_fit: ContextFit::Full,
             can_run_by: vec![],

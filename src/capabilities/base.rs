@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 // Canonical launch-time types live in `launchers::base` -- re-exported here so
-// capabilities and launchers share one `LaunchContext`/`EnvBinding` pair.
-pub(crate) use crate::launchers::{EnvBinding, LaunchContext};
+// capabilities and launchers share one `LaunchContext`.
+pub(crate) use crate::launchers::LaunchContext;
 
 /*-- invalid settings ---------------------------------------------------------*/
 
@@ -378,9 +378,6 @@ pub(crate) trait ResolvedCapability: CapabilityInfo {
     }
     async fn on_shutdown(&self, _context: &LaunchContext) -> anyhow::Result<()> {
         Ok(())
-    }
-    fn runtime_bindings(&self) -> Vec<EnvBinding> {
-        vec![]
     }
 }
 

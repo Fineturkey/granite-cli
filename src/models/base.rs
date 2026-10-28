@@ -2,10 +2,8 @@
 use serde::{Deserialize, Serialize};
 
 // Local
-use crate::models::context_fit::{self, ContextFit};
 use crate::registry::ConfigConstructable;
 use crate::utils::Searchable;
-use crate::utils::hardware::HardwareProfile;
 
 /*-- ModelFunction Enum ------------------------------------------------------*/
 
@@ -142,21 +140,6 @@ pub(crate) trait Model: crate::registry::Named + Send + Sync {
 
     /// Model functions this model supports (OR logic - any of these)
     fn supported_functions(&self) -> &[ModelFunction];
-
-    /// Estimate whether `variant` will run on `hardware` at its full
-    /// configured context length, at a reduced context length, or not at
-    /// all. Derives KV-cache/recurrent-state memory from the model's actual
-    /// per-layer-kind architecture rather than a flat per-parameter
-    /// heuristic.
-    fn context_fit(&self, variant: &ModelVariant, hardware: &HardwareProfile) -> ContextFit {
-        context_fit::estimate(
-            self.context_length(),
-            self.architecture(),
-            self.native_dtype(),
-            variant,
-            hardware,
-        )
-    }
 
     /// Snapshot this instance's data into a `ModelMetadata` value, using the
     /// same accessors the registry uses to describe a catalog entry. Lets

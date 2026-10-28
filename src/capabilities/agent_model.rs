@@ -69,12 +69,6 @@ impl crate::registry::Named for ResolvedAgentModelCapability {
     }
 }
 
-impl AgentModelCapability {
-    fn configured_model_id(&self) -> &str {
-        &self.config.model_id
-    }
-}
-
 impl crate::capabilities::CapabilityInfo for AgentModelCapability {
     fn name(&self) -> &str {
         "Agent Model Binding"

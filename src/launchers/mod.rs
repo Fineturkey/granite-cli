@@ -117,7 +117,7 @@ pub(crate) mod opencode;
 pub(crate) mod pi;
 
 pub(crate) use base::resolve_and_bind;
-pub(crate) use base::{EnvBinding, LaunchContext, Launcher, LauncherMetadata};
+pub(crate) use base::{LaunchContext, Launcher, LauncherMetadata};
 
 /*-- private shared modules --*/
 

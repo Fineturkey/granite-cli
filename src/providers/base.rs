@@ -377,15 +377,6 @@ pub(crate) enum ProviderError {
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
 
-    #[error("Authentication failed: {0}")]
-    Auth(String),
-
-    #[error("Rate limited: {0}")]
-    RateLimited(String),
-
-    #[error("Model not found: {0}")]
-    ModelNotFound(String),
-
     #[error("Provider error: {0}")]
     Other(String),
 }
