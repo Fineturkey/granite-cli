@@ -14,12 +14,14 @@ use crate::utils::ui::base::{self, HasUiMetadata, Ui, UiMetadata};
 pub(crate) struct JsonOutput {
     writer: Mutex<Box<dyn Write + Send>>,
     /// Shared capture buffer — `Some` only when constructed via `with_capture`.
+    #[cfg_attr(not(test), allow(dead_code))]
     buf: Option<Arc<Mutex<Vec<u8>>>>,
 }
 
 impl JsonOutput {
     /// Construct a capturing instance whose output can be read back via
     /// `captured()`. Used in tests only.
+    #[cfg_attr(not(test), allow(dead_code))]
     fn with_capture() -> Self {
         let buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let writer: Box<dyn Write + Send> = Box::new(SharedWriter(Arc::clone(&buf)));
@@ -31,6 +33,7 @@ impl JsonOutput {
 
     /// Return all emitted JSON objects in emission order.
     /// Panics if called on a non-capturing instance.
+    #[cfg_attr(not(test), allow(dead_code))]
     fn captured(&self) -> Vec<serde_json::Value> {
         let buf = self
             .buf
@@ -53,6 +56,7 @@ impl JsonOutput {
 
 /// A `Write` impl backed by a shared `Arc<Mutex<Vec<u8>>>` so the buffer
 /// can be read back without downcasting.
+#[cfg_attr(not(test), allow(dead_code))]
 struct SharedWriter(Arc<Mutex<Vec<u8>>>);
 
 impl Write for SharedWriter {

@@ -82,14 +82,6 @@ impl crate::registry::Named for StaticCapabilityBinding {
 }
 
 impl crate::capabilities::CapabilityInfo for StaticCapabilityBinding {
-    fn name(&self) -> &str {
-        "Static Binding"
-    }
-
-    fn description(&self) -> &str {
-        "internal: hands a pre-resolved binding to a backing launcher"
-    }
-
     fn binding_types(&self) -> std::collections::HashSet<BindingType> {
         std::collections::HashSet::from([self.binding.binding_type()])
     }

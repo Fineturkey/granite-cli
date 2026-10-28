@@ -22,11 +22,10 @@ use_channel!("LNCHR");
 /// All launchers must implement this trait along with ConfigConstructable.
 #[async_trait]
 pub(crate) trait Launcher: crate::registry::Named + Send + Sync {
-    fn name(&self) -> &str;
-
     /// The binary/command this instance will exec.
     /// Returns the full command string — either a bare binary name for PATH
     /// lookup (e.g. `"claude"`) or an absolute path set by the user in config.
+    #[cfg_attr(not(test), allow(dead_code))]
     fn command(&self) -> &str;
 
     /// Bind a capability to this launcher instance.
@@ -533,10 +532,6 @@ pub(crate) mod tests {
 
     #[async_trait]
     impl Launcher for FakeLauncher {
-        fn name(&self) -> &str {
-            "Fake Launcher"
-        }
-
         fn command(&self) -> &str {
             &self.command_name
         }

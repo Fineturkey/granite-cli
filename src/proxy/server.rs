@@ -126,6 +126,7 @@ impl ProxyHandle {
 
     /// Sets (or replaces) the fallback target used for requests whose
     /// `"model"` field doesn't match any registered route or provider prefix.
+    #[cfg_attr(not(test), allow(dead_code))]
     fn set_default(&self, target: UpstreamTarget, label: String) -> anyhow::Result<()> {
         let resolved = ResolvedTarget::build(target)?;
         let mut table = self.state.routing.write().unwrap();

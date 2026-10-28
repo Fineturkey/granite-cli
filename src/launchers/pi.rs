@@ -72,10 +72,6 @@ impl crate::registry::Named for PiLauncher {
 
 #[async_trait]
 impl Launcher for PiLauncher {
-    fn name(&self) -> &str {
-        "Pi CLI"
-    }
-
     fn command(&self) -> &str {
         self.config.command_path.as_deref().unwrap_or("pi")
     }

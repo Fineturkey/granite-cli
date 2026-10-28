@@ -149,6 +149,7 @@ pub(crate) trait Provider: crate::registry::Named + Send + Sync {
     fn verify_ssl(&self) -> bool;
 
     // Model support
+    #[cfg_attr(not(test), allow(dead_code))]
     fn supported_formats(&self) -> Vec<ModelFormat>;
     fn can_run_model(&self, _variant_format: &str, _variant_precision: &str) -> bool {
         true

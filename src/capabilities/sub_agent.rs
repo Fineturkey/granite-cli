@@ -56,12 +56,6 @@ macro_rules! declare_sub_agent_basic {
             }
 
             impl $crate::capabilities::CapabilityInfo for [<Resolved $name_struct>] {
-                fn name(&self) -> &str {
-                    $crate::capabilities::CapabilityInfo::name(&self.inner)
-                }
-                fn description(&self) -> &str {
-                    $crate::capabilities::CapabilityInfo::description(&self.inner)
-                }
                 fn binding_types(&self) -> std::collections::HashSet<$crate::capabilities::base::BindingType> {
                     $crate::capabilities::CapabilityInfo::binding_types(&self.inner)
                 }
@@ -99,14 +93,6 @@ macro_rules! declare_sub_agent_basic {
         }
 
         impl $crate::capabilities::CapabilityInfo for $name_struct {
-            fn name(&self) -> &str {
-                $name_cap
-            }
-
-            fn description(&self) -> &str {
-                $description_cap
-            }
-
             fn binding_types(&self) -> std::collections::HashSet<$crate::capabilities::base::BindingType> {
                 std::collections::HashSet::from([$crate::capabilities::base::BindingType::SubAgent])
             }
@@ -246,12 +232,6 @@ macro_rules! declare_sub_agent_full {
             }
 
             impl $crate::capabilities::CapabilityInfo for [<Resolved $name_struct>] {
-                fn name(&self) -> &str {
-                    $crate::capabilities::CapabilityInfo::name(&self.inner)
-                }
-                fn description(&self) -> &str {
-                    $crate::capabilities::CapabilityInfo::description(&self.inner)
-                }
                 fn binding_types(&self) -> std::collections::HashSet<$crate::capabilities::base::BindingType> {
                     $crate::capabilities::CapabilityInfo::binding_types(&self.inner)
                 }
@@ -289,14 +269,6 @@ macro_rules! declare_sub_agent_full {
         }
 
         impl $crate::capabilities::CapabilityInfo for $name_struct {
-            fn name(&self) -> &str {
-                $name_cap
-            }
-
-            fn description(&self) -> &str {
-                $description_cap
-            }
-
             fn binding_types(&self) -> std::collections::HashSet<$crate::capabilities::base::BindingType> {
                 std::collections::HashSet::from([$crate::capabilities::base::BindingType::SubAgent])
             }

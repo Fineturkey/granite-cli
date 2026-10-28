@@ -125,10 +125,6 @@ impl crate::registry::Named for BobLauncher {
 
 #[async_trait]
 impl Launcher for BobLauncher {
-    fn name(&self) -> &str {
-        "Bob CLI"
-    }
-
     fn command(&self) -> &str {
         self.config.command_path.as_deref().unwrap_or("bob")
     }
@@ -549,12 +545,6 @@ mod tests {
     }
 
     impl crate::capabilities::CapabilityInfo for FakeMcpCapability {
-        fn name(&self) -> &str {
-            "Fake Mcp"
-        }
-        fn description(&self) -> &str {
-            "test double"
-        }
         fn binding_types(&self) -> HashSet<BindingType> {
             HashSet::from([BindingType::Mcp])
         }
@@ -580,12 +570,6 @@ mod tests {
     }
 
     impl crate::capabilities::CapabilityInfo for FakeSubAgentCapability {
-        fn name(&self) -> &str {
-            "Fake SubAgent"
-        }
-        fn description(&self) -> &str {
-            "test double"
-        }
         fn binding_types(&self) -> HashSet<BindingType> {
             HashSet::from([BindingType::SubAgent])
         }

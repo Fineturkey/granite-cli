@@ -331,9 +331,6 @@ impl McpBinding {
 /// a list of configured capabilities reads the same either side of
 /// resolution.
 pub(crate) trait CapabilityInfo: crate::registry::Named + Send + Sync {
-    fn name(&self) -> &str;
-    fn description(&self) -> &str;
-
     /// Which binding surfaces this capability instance can fill.
     fn binding_types(&self) -> HashSet<BindingType>;
 }

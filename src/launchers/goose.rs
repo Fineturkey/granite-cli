@@ -70,10 +70,6 @@ impl crate::registry::Named for GooseLauncher {
 
 #[async_trait]
 impl Launcher for GooseLauncher {
-    fn name(&self) -> &str {
-        "Goose CLI"
-    }
-
     fn command(&self) -> &str {
         self.config.command_path.as_deref().unwrap_or("goose")
     }

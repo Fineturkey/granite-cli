@@ -75,6 +75,7 @@ pub(crate) trait Configured<U: Catalogued + ?Sized> {
     /// constructed with. Callers use this to drive the next round of
     /// configuration for one of a `Resolution`'s `configurable_types`,
     /// without knowing anything about that type's concrete config struct.
+    #[cfg_attr(not(test), allow(dead_code))]
     fn config_schema(&self, type_name: &str) -> Option<schemars::Schema>;
 }
 

@@ -70,28 +70,12 @@ impl crate::registry::Named for ResolvedAgentModelCapability {
 }
 
 impl crate::capabilities::CapabilityInfo for AgentModelCapability {
-    fn name(&self) -> &str {
-        "Agent Model Binding"
-    }
-
-    fn description(&self) -> &str {
-        "Surfaces a configured model's connection details (base URL, model name, auth, TLS) to a launched agent."
-    }
-
     fn binding_types(&self) -> HashSet<BindingType> {
         HashSet::from([BindingType::AgentModel])
     }
 }
 
 impl crate::capabilities::CapabilityInfo for ResolvedAgentModelCapability {
-    fn name(&self) -> &str {
-        crate::capabilities::CapabilityInfo::name(&self.inner)
-    }
-
-    fn description(&self) -> &str {
-        crate::capabilities::CapabilityInfo::description(&self.inner)
-    }
-
     fn binding_types(&self) -> HashSet<BindingType> {
         crate::capabilities::CapabilityInfo::binding_types(&self.inner)
     }

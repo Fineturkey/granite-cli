@@ -5,16 +5,23 @@ use crate::registry::ConfigConstructable;
 
 /*-- public --*/
 
+#[cfg(test)]
 type TableRow = Vec<String>;
+#[cfg(test)]
 type TableEntry = (String, Vec<String>, Vec<TableRow>);
+#[cfg(test)]
 type DetailField = (String, String);
+#[cfg(test)]
 type DetailEntry = (String, Vec<DetailField>);
+#[cfg(test)]
 type SelectEntry = (String, Vec<String>, usize);
+#[cfg(test)]
 type MultiSelectEntry = (String, Vec<String>, Vec<bool>);
 
 /// Metadata describing a registered UI backend.
 #[derive(Debug, Clone)]
 pub(crate) struct UiMetadata {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) name: String,
     pub(crate) description: String,
 }
@@ -155,6 +162,7 @@ pub(crate) trait Ui: Send + Sync + Any {
     fn pull_finish(&self, handle: PullHandle, label: &str, error: Option<&str>);
 
     /// Apply severity-based markings (e.g. green) to `msg`.
+    #[cfg_attr(not(test), allow(dead_code))]
     fn ok(&self, msg: &str) -> String {
         msg.to_string()
     }

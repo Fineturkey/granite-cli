@@ -96,10 +96,6 @@ impl crate::registry::Named for OpenCodeLauncher {
 
 #[async_trait]
 impl Launcher for OpenCodeLauncher {
-    fn name(&self) -> &str {
-        "OpenCode CLI"
-    }
-
     fn command(&self) -> &str {
         self.config.command_path.as_deref().unwrap_or("opencode")
     }
@@ -1779,12 +1775,6 @@ mod tests {
     }
 
     impl crate::capabilities::CapabilityInfo for FakeSubAgentCapability {
-        fn name(&self) -> &str {
-            "Fake Sub-Agent"
-        }
-        fn description(&self) -> &str {
-            "test double"
-        }
         fn binding_types(&self) -> HashSet<BindingType> {
             HashSet::from([BindingType::SubAgent])
         }

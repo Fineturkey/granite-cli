@@ -74,10 +74,6 @@ impl crate::registry::Named for HermesLauncher {
 
 #[async_trait]
 impl Launcher for HermesLauncher {
-    fn name(&self) -> &str {
-        "Hermes CLI"
-    }
-
     fn command(&self) -> &str {
         self.config.command_path.as_deref().unwrap_or("hermes")
     }

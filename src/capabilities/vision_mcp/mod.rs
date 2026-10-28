@@ -127,28 +127,12 @@ impl crate::registry::Named for VisionMCPCapability {
 
 #[async_trait]
 impl crate::capabilities::CapabilityInfo for VisionMCPCapability {
-    fn name(&self) -> &str {
-        "Vision MCP Server"
-    }
-
-    fn description(&self) -> &str {
-        "Exposes a vision-language model as an MCP server (compare/analyze images) for a launched coding agent to call."
-    }
-
     fn binding_types(&self) -> HashSet<BindingType> {
         HashSet::from([BindingType::Mcp])
     }
 }
 
 impl crate::capabilities::CapabilityInfo for ResolvedVisionMCPCapability {
-    fn name(&self) -> &str {
-        crate::capabilities::CapabilityInfo::name(&self.inner)
-    }
-
-    fn description(&self) -> &str {
-        crate::capabilities::CapabilityInfo::description(&self.inner)
-    }
-
     fn binding_types(&self) -> HashSet<BindingType> {
         crate::capabilities::CapabilityInfo::binding_types(&self.inner)
     }

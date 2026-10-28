@@ -63,10 +63,6 @@ impl crate::registry::Named for OpenClawLauncher {
 
 #[async_trait]
 impl Launcher for OpenClawLauncher {
-    fn name(&self) -> &str {
-        "OpenClaw CLI"
-    }
-
     fn command(&self) -> &str {
         self.config.command_path.as_deref().unwrap_or("openclaw")
     }
