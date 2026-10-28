@@ -128,6 +128,10 @@ impl crate::capabilities::ResolvedCapability for ResolvedAgentModelCapability {
             verify_ssl: provider.verify_ssl(),
             context_length: Some(configured_model.model.context_length()),
             custom_headers: provider.custom_headers(),
+            supported_reasoning_efforts: configured_model
+                .model
+                .supported_reasoning_efforts()
+                .to_vec(),
         }))
     }
 }
@@ -148,6 +152,7 @@ impl HasCapabilityMetadata for AgentModelCapability {
             }],
             tags: vec!["agent".to_string(), "model".to_string()],
             supported_binding_types: HashSet::from([BindingType::AgentModel]),
+            auto_configurable: true,
         }
     }
 }

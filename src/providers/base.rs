@@ -17,6 +17,8 @@ pub(crate) enum ApiType {
     Ollama,
     /// Anthropic API protocol
     Anthropic,
+    /// Jev Decision API
+    Jev,
 }
 
 impl std::fmt::Display for ApiType {
@@ -25,6 +27,7 @@ impl std::fmt::Display for ApiType {
             ApiType::OpenAI => write!(f, "OpenAI"),
             ApiType::Ollama => write!(f, "Ollama"),
             ApiType::Anthropic => write!(f, "Anthropic"),
+            ApiType::Jev => write!(f, "Jev"),
         }
     }
 }
@@ -46,6 +49,8 @@ pub(crate) enum ApiEndpoint {
     OllamaEmbeddings,
     /// /v1/messages
     AnthropicMessages,
+    /// /v1/systemone
+    JevSystemOne,
 }
 
 impl ApiEndpoint {
@@ -59,6 +64,7 @@ impl ApiEndpoint {
             ApiEndpoint::OllamaChat | ApiEndpoint::OllamaEmbeddings => ApiType::Ollama,
 
             ApiEndpoint::AnthropicMessages => ApiType::Anthropic,
+            ApiEndpoint::JevSystemOne => ApiType::Jev,
         }
     }
 
@@ -71,6 +77,7 @@ impl ApiEndpoint {
             ApiEndpoint::OllamaChat => "/api/chat",
             ApiEndpoint::OllamaEmbeddings => "/api/embeddings",
             ApiEndpoint::AnthropicMessages => "/v1/messages",
+            ApiEndpoint::JevSystemOne => "/v1/systemone",
         }
     }
 
@@ -97,6 +104,8 @@ impl ApiEndpoint {
                 ModelFunction::SpeakerAttribution,
                 ModelFunction::KeywordBiasing,
             ],
+
+            ApiEndpoint::JevSystemOne => vec![ModelFunction::Decision],
         }
     }
 }
@@ -405,6 +414,7 @@ mod tests {
         assert_eq!(ApiEndpoint::OllamaChat.path(), "/api/chat");
         assert_eq!(ApiEndpoint::OllamaEmbeddings.path(), "/api/embeddings");
         assert_eq!(ApiEndpoint::AnthropicMessages.path(), "/v1/messages");
+        assert_eq!(ApiEndpoint::JevSystemOne.path(), "/v1/systemone");
     }
 
     #[test]
@@ -421,6 +431,15 @@ mod tests {
             ApiEndpoint::AnthropicMessages.api_type(),
             ApiType::Anthropic
         ));
+        assert!(matches!(ApiEndpoint::JevSystemOne.api_type(), ApiType::Jev));
+    }
+
+    #[test]
+    fn test_api_type_display() {
+        assert_eq!(ApiType::OpenAI.to_string(), "OpenAI");
+        assert_eq!(ApiType::Ollama.to_string(), "Ollama");
+        assert_eq!(ApiType::Anthropic.to_string(), "Anthropic");
+        assert_eq!(ApiType::Jev.to_string(), "Jev");
     }
 
     #[test]
@@ -435,6 +454,11 @@ mod tests {
 
         let audio_functions = ApiEndpoint::OpenAIAudioTranscription.provides_functions();
         assert!(audio_functions.contains(&ModelFunction::Transcription));
+
+        assert_eq!(
+            ApiEndpoint::JevSystemOne.provides_functions(),
+            vec![ModelFunction::Decision]
+        );
     }
 
     #[test]
@@ -446,6 +470,7 @@ mod tests {
             "Image Understanding"
         );
         assert_eq!(ModelFunction::Transcription.to_string(), "Transcription");
+        assert_eq!(ModelFunction::Decision.to_string(), "Decision");
     }
 
     #[test]

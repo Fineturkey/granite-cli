@@ -26,7 +26,7 @@ use crate::capabilities::{
     SubAgentBinding, ToolName,
 };
 use crate::launchers::base::{EnvBinding, LaunchContext, Launcher, LauncherMetadata, run_command};
-use crate::launchers::shared::mcp_cli::mcp_binding_request;
+use crate::launchers::shared::mcp_cli::{STDIO_HTTP_AND_SSE, mcp_binding_request, transport_set};
 use crate::providers::ApiType;
 use crate::proxy::ProxyHandle;
 use crate::registry::{ConfigConstructable, ConstructError};
@@ -111,7 +111,9 @@ impl Launcher for OpenCodeLauncher {
         }
 
         if capability_types.contains(&BindingType::Mcp) {
-            let binding = capability.bind(mcp_binding_request()).await?;
+            let binding = capability
+                .bind(mcp_binding_request(&Self::metadata().mcp_transports))
+                .await?;
             match binding {
                 Binding::Mcp(binding) => {
                     self.bound_mcp_bindings
@@ -337,6 +339,7 @@ impl HasOpenCodeLauncherMetadata for OpenCodeLauncher {
                 BindingType::Mcp,
                 BindingType::SubAgent,
             ]),
+            mcp_transports: transport_set(STDIO_HTTP_AND_SSE),
             tags: vec!["opencode".to_string(), "coding-agent".to_string()],
         }
     }
@@ -400,12 +403,25 @@ impl OpenCodeLauncher {
         // guessing an output cap.
         let mut models = serde_json::Map::new();
         for name in model_names {
-            models.insert(
-                (*name).to_string(),
-                serde_json::json!({
-                    "name": name,
-                }),
-            );
+            let mut model = serde_json::json!({
+                "name": name,
+            });
+            // One selectable variant per supported effort, so the user can
+            // cycle through only the settings the model's template honors.
+            let efforts = self.reasoning_efforts_for(&binding.provider_name, name);
+            if !efforts.is_empty() {
+                let variants: serde_json::Map<String, serde_json::Value> = efforts
+                    .iter()
+                    .map(|effort| {
+                        (
+                            effort.as_str().to_string(),
+                            serde_json::json!({ "reasoningEffort": effort.as_str() }),
+                        )
+                    })
+                    .collect();
+                model["variants"] = serde_json::Value::Object(variants);
+            }
+            models.insert((*name).to_string(), model);
         }
 
         let mut entry = serde_json::json!({
@@ -470,6 +486,21 @@ impl OpenCodeLauncher {
         groups
     }
 
+    /// The reasoning efforts supported by the bound model named `model_name`
+    /// on `provider_name` (main model first, then sub-agents). Empty when no
+    /// bound model matches.
+    fn reasoning_efforts_for(
+        &self,
+        provider_name: &str,
+        model_name: &str,
+    ) -> &[crate::models::ReasoningEffort] {
+        self.bound_agent_model
+            .iter()
+            .chain(self.bound_sub_agents.iter().map(|(_, sub)| &sub.model))
+            .find(|b| b.provider_name == provider_name && b.model_name == model_name)
+            .map_or(&[], |b| b.supported_reasoning_efforts.as_slice())
+    }
+
     /// Builds the `agent.<name>` entries for every bound sub-agent:
     /// `description`, `prompt`, `model` (as `<provider>/<model>`, per
     /// <https://opencode.ai/docs/agents/>), and `tools` when a tool
@@ -529,7 +560,7 @@ impl OpenCodeLauncher {
     /// delegates to `opencode_base_url` to compute the provider's real URL.
     fn proxy_base_url(&self, proxy: Option<&ProxyHandle>, binding: &AgentModelBinding) -> String {
         match proxy {
-            Some(handle) => handle.local_base_url.clone(),
+            Some(handle) => join_base_url(&handle.local_base_url, binding),
             None => opencode_base_url(binding),
         }
     }
@@ -599,28 +630,28 @@ impl OpenCodeLauncher {
                 result.push(c);
                 continue;
             }
-            if c == '/' {
-                if let Some(&next) = chars.peek() {
-                    if next == '/' {
-                        // Line comment: skip to end of line
-                        while let Some(&ch) = chars.peek() {
-                            if ch == '\n' {
-                                break;
-                            }
-                            chars.next();
+            if c == '/'
+                && let Some(&next) = chars.peek()
+            {
+                if next == '/' {
+                    // Line comment: skip to end of line
+                    while let Some(&ch) = chars.peek() {
+                        if ch == '\n' {
+                            break;
                         }
-                        continue;
-                    } else if next == '*' {
-                        // Block comment: skip to */
-                        chars.next(); // consume '*'
-                        while let Some(ch) = chars.next() {
-                            if ch == '*' && chars.peek() == Some(&'/') {
-                                chars.next();
-                                break;
-                            }
-                        }
-                        continue;
+                        chars.next();
                     }
+                    continue;
+                } else if next == '*' {
+                    // Block comment: skip to */
+                    chars.next(); // consume '*'
+                    while let Some(ch) = chars.next() {
+                        if ch == '*' && chars.peek() == Some(&'/') {
+                            chars.next();
+                            break;
+                        }
+                    }
+                    continue;
                 }
             }
             result.push(c);
@@ -939,7 +970,14 @@ fn provider_api_key_env(index: usize) -> String {
 /// (e.g. `/chat/completions`), so drop that trailing operation from the
 /// binding's full endpoint path and keep the version prefix.
 fn opencode_base_url(binding: &AgentModelBinding) -> String {
-    let root = binding.base_url.trim_end_matches('/');
+    join_base_url(&binding.base_url, binding)
+}
+
+/// Appends the binding's API version prefix (e.g. `/v1`) to `root`. Needed for
+/// the proxy URL too: the proxy serves the same paths as the real endpoint,
+/// and OpenAI-compatible SDKs append only the operation (`/chat/completions`).
+fn join_base_url(root: &str, binding: &AgentModelBinding) -> String {
+    let root = root.trim_end_matches('/');
     let prefix = binding
         .endpoint_path
         .strip_suffix("/chat/completions")
@@ -1045,6 +1083,7 @@ mod tests {
             verify_ssl: true,
             context_length: Some(131072),
             custom_headers: None,
+            supported_reasoning_efforts: vec![],
         }
     }
 
@@ -1246,6 +1285,7 @@ mod tests {
         );
         let b = AgentModelBinding {
             custom_headers: Some(headers),
+            supported_reasoning_efforts: vec![],
             ..binding()
         };
         let entry = launcher(serde_json::json!({}))
@@ -1290,6 +1330,35 @@ mod tests {
             },
             known_type: None,
         }
+    }
+
+    #[test]
+    fn provider_entry_omits_variants_without_reasoning_efforts() {
+        let mut l = launcher(serde_json::json!({}));
+        let b = binding();
+        l.bound_agent_model = Some(b.clone());
+        let entry = l
+            .provider_entry(None, &b, &[b.model_name.as_str()], API_KEY_ENV)
+            .unwrap();
+        assert!(entry["models"][b.model_name.as_str()]["variants"].is_null());
+    }
+
+    #[test]
+    fn provider_entry_emits_a_variant_per_supported_reasoning_effort() {
+        use crate::models::ReasoningEffort;
+        let mut l = launcher(serde_json::json!({}));
+        let b = AgentModelBinding {
+            supported_reasoning_efforts: vec![ReasoningEffort::Low, ReasoningEffort::High],
+            ..binding()
+        };
+        l.bound_agent_model = Some(b.clone());
+        let entry = l
+            .provider_entry(None, &b, &[b.model_name.as_str()], API_KEY_ENV)
+            .unwrap();
+        let variants = &entry["models"][b.model_name.as_str()]["variants"];
+        assert_eq!(variants["low"]["reasoningEffort"], "low");
+        assert_eq!(variants["high"]["reasoningEffort"], "high");
+        assert!(variants.get("medium").is_none());
     }
 
     #[test]
@@ -1812,7 +1881,7 @@ mod tests {
         let l = launcher(serde_json::json!({}));
         assert_eq!(
             l.proxy_base_url(Some(&server.handle), &b),
-            server.handle.local_base_url
+            format!("{}/v1", server.handle.local_base_url)
         );
         server.shutdown().await;
     }
@@ -1837,7 +1906,10 @@ mod tests {
                 API_KEY_ENV,
             )
             .unwrap();
-        assert_eq!(entry["options"]["baseURL"], server.handle.local_base_url);
+        assert_eq!(
+            entry["options"]["baseURL"],
+            format!("{}/v1", server.handle.local_base_url)
+        );
         server.shutdown().await;
     }
 

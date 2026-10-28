@@ -134,6 +134,12 @@ impl TuiUi {
 }
 
 impl Ui for TuiUi {
+    /// Prompts go to the TUI's own pane over `prompt_tx`, so a TUI session
+    /// can ask whatever stdin and stderr are connected to.
+    fn is_interactive(&self) -> bool {
+        true
+    }
+
     fn table(&self, _title: &str, _headers: &[&str], _rows: &[Vec<String>]) {}
     fn detail(&self, _title: &str, _fields: &[(&str, String)]) {}
 
@@ -281,3 +287,23 @@ impl Ui for TuiUi {
 // Setup tasks run on a blocking thread; Ui requires Send + Sync.
 unsafe impl Send for TuiUi {}
 unsafe impl Sync for TuiUi {}
+
+/*-- tests --*/
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_always_interactive() {
+        let (prompt_tx, _prompt_rx) = std::sync::mpsc::sync_channel::<Prompt>(0);
+        let (_answer_tx, answer_rx) = std::sync::mpsc::sync_channel::<Answer>(0);
+        let ui = TuiUi::new(
+            prompt_tx,
+            answer_rx,
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(HashMap::new())),
+        );
+        assert!(ui.is_interactive());
+    }
+}

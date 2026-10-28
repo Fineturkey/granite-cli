@@ -112,11 +112,9 @@ impl CapabilityCommands {
                     let mut instance_fields: Vec<(&str, String)> = Vec::new();
 
                     instance_fields.push(("Config: Type", configured.capability_type.clone()));
-                    if let Some(obj) = configured.config.as_object() {
-                        for (k, v) in obj {
-                            instance_fields.push(("Config", format!("{k} = {v}")));
-                        }
-                    }
+                    let config_fields = crate::commands::shared::config_fields(&configured.config);
+                    instance_fields
+                        .extend(config_fields.iter().map(|(k, v)| (k.as_str(), v.clone())));
 
                     ctx.ui.detail(capability_id, &instance_fields);
                 }

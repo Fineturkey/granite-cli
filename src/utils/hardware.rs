@@ -130,10 +130,10 @@ mod gpu {
                 continue;
             }
 
-            if let Ok(raw) = std::fs::read_to_string(device_dir.join("mem_info_vram_total")) {
-                if let Ok(bytes) = raw.trim().parse::<u64>() {
-                    return Some((Some("AMD".to_string()), Some(bytes_to_gb(bytes))));
-                }
+            if let Ok(raw) = std::fs::read_to_string(device_dir.join("mem_info_vram_total"))
+                && let Ok(bytes) = raw.trim().parse::<u64>()
+            {
+                return Some((Some("AMD".to_string()), Some(bytes_to_gb(bytes))));
             }
         }
         None

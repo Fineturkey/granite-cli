@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 // Local
 use crate::models::base::{
     HasModelMetadata, Model, ModelArchitecture, ModelFunction, ModelMetadata, ModelType,
-    ModelVariant,
+    ModelVariant, ReasoningEffort,
 };
 use crate::registry::{ConfigConstructable, ConstructError, Named};
 
@@ -43,6 +43,9 @@ pub(crate) struct CustomModelConfig {
     pub(crate) tags: Vec<String>,
     #[serde(default)]
     pub(crate) supported_functions: Vec<ModelFunction>,
+    /// `reasoning_effort` values the model's chat template understands.
+    #[serde(default)]
+    pub(crate) supported_reasoning_efforts: Vec<ReasoningEffort>,
 }
 
 fn empty_architecture() -> ModelArchitecture {
@@ -138,6 +141,10 @@ impl Model for CustomModel {
 
     fn supported_functions(&self) -> &[ModelFunction] {
         &self.config.supported_functions
+    }
+
+    fn supported_reasoning_efforts(&self) -> &[ReasoningEffort] {
+        &self.config.supported_reasoning_efforts
     }
 }
 

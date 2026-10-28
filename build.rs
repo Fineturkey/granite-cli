@@ -181,6 +181,21 @@ fn generate_model_struct(model: &YamlModel) -> String {
     s.push_str("        &FUNCS\n");
     s.push_str("    }\n");
 
+    if !model.supported_reasoning_efforts.is_empty() {
+        s.push_str(
+            "    fn supported_reasoning_efforts(&self) -> &[crate::models::base::ReasoningEffort] {\n",
+        );
+        s.push_str("        &[\n");
+        for effort in &model.supported_reasoning_efforts {
+            s.push_str(&format!(
+                "            crate::models::base::ReasoningEffort::{},\n",
+                reasoning_effort_variant(effort)
+            ));
+        }
+        s.push_str("        ]\n");
+        s.push_str("    }\n");
+    }
+
     s.push_str("}\n\n");
 
     // HasModelMetadata implementation
@@ -193,6 +208,19 @@ fn generate_model_struct(model: &YamlModel) -> String {
     s.push_str("}\n\n");
 
     s
+}
+
+/// Maps a `models.yaml` effort string to its `ReasoningEffort` variant name.
+fn reasoning_effort_variant(effort: &str) -> &'static str {
+    match effort {
+        "none" => "None",
+        "minimal" => "Minimal",
+        "low" => "Low",
+        "medium" => "Medium",
+        "high" => "High",
+        "xhigh" => "XHigh",
+        other => panic!("Unknown reasoning effort in models.yaml: {other}"),
+    }
 }
 
 fn generate_metadata_literal(model: &YamlModel) -> String {
@@ -383,6 +411,8 @@ struct YamlModel {
     description: Option<String>,
     tags: Vec<String>,
     supported_functions: Vec<String>,
+    #[serde(default)]
+    supported_reasoning_efforts: Vec<String>,
 }
 
 #[derive(serde::Deserialize)]

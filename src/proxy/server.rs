@@ -290,9 +290,10 @@ impl RoutingTable {
     fn target_and_label_for(
         &self,
         path_and_query: &str,
+        content_type: Option<&str>,
         body: &[u8],
     ) -> anyhow::Result<(ResolvedTarget, String, String)> {
-        let model = model_from_body(body);
+        let model = model_from_request(content_type, body);
         if let Some((name, rest)) = split_provider_path(path_and_query) {
             let Some((target, label)) = self.providers.get(name) else {
                 anyhow::bail!("no provider registered under '/providers/{name}'");
@@ -339,6 +340,74 @@ fn model_from_body(body: &[u8]) -> Option<String> {
     let model = value.get("model")?.as_str().map(str::to_string);
     alog_channel!(MessageLevel::Debug4, "Found model: {:#?}", model);
     model
+}
+
+/// The model a request names. JSON bodies carry it as a top-level `"model"`
+/// string; `multipart/form-data` bodies (OpenAI-style audio transcription
+/// uploads) carry it as a `model` form field instead, so both shapes route.
+fn model_from_request(content_type: Option<&str>, body: &[u8]) -> Option<String> {
+    match content_type.and_then(multipart_boundary) {
+        Some(boundary) => model_from_multipart(body, &boundary),
+        None => model_from_body(body),
+    }
+}
+
+/// The `boundary` parameter of a `multipart/form-data` content type.
+fn multipart_boundary(content_type: &str) -> Option<String> {
+    let mut parts = content_type.split(';');
+    if !parts
+        .next()?
+        .trim()
+        .eq_ignore_ascii_case("multipart/form-data")
+    {
+        return None;
+    }
+    parts.find_map(|param| {
+        let (key, value) = param.trim().split_once('=')?;
+        key.trim()
+            .eq_ignore_ascii_case("boundary")
+            .then(|| value.trim().trim_matches('"').to_string())
+            .filter(|b| !b.is_empty())
+    })
+}
+
+/// Reads the text value of a form field named `model` from a multipart body.
+///
+/// Only the part headers and the one small field are inspected; the (possibly
+/// large) audio part is skipped over without being decoded, and the body is
+/// forwarded to the upstream untouched.
+fn model_from_multipart(body: &[u8], boundary: &str) -> Option<String> {
+    let delimiter = format!("--{boundary}");
+    let delimiter = delimiter.as_bytes();
+    let mut rest = body;
+    while let Some(start) = find_subslice(rest, delimiter) {
+        let after = &rest[start + delimiter.len()..];
+        // The closing delimiter is `--boundary--`.
+        if after.starts_with(b"--") {
+            return None;
+        }
+        let part = after.strip_prefix(b"\r\n").unwrap_or(after);
+        let header_end = find_subslice(part, b"\r\n\r\n")?;
+        let headers = String::from_utf8_lossy(&part[..header_end]).to_ascii_lowercase();
+        let value = &part[header_end + 4..];
+        let value_end = find_subslice(value, delimiter).unwrap_or(value.len());
+        if headers.contains("name=\"model\"") {
+            let text = value[..value_end]
+                .strip_suffix(b"\r\n")
+                .unwrap_or(&value[..value_end]);
+            let model = String::from_utf8_lossy(text).trim().to_string();
+            alog_channel!(MessageLevel::Debug4, "Found multipart model: {:#?}", model);
+            return (!model.is_empty()).then_some(model);
+        }
+        rest = &part[header_end + 4 + value_end..];
+    }
+    None
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 /// Headers that must not be blindly forwarded in either direction:
@@ -401,7 +470,10 @@ async fn forward(
     let path_and_query = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
     let (target, label, forward_path) = {
         let table = state.routing.read().unwrap();
-        table.target_and_label_for(path_and_query, &body_bytes)?
+        let content_type = headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok());
+        table.target_and_label_for(path_and_query, content_type, &body_bytes)?
     };
 
     let url = format!("{}{}", target.base_url.trim_end_matches('/'), forward_path);
@@ -653,6 +725,73 @@ mod tests {
         // Client auth was stripped and replaced with the route's own key.
         assert_eq!(body["authorization"], "Bearer known-key");
         assert_eq!(body["x_api_key"], "known-key");
+
+        server.shutdown().await;
+    }
+
+    /// An upstream that names itself and echoes the model it was asked for,
+    /// whatever shape the body arrived in.
+    async fn spawn_named_upstream(name: &'static str) -> SocketAddr {
+        let handler = move |headers: HeaderMap, body: axum::body::Bytes| async move {
+            let content_type = headers
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            let model = model_from_request(content_type.as_deref(), &body).unwrap_or_default();
+            axum::Json(serde_json::json!({
+                "served_by": name,
+                "model": model,
+                "body_len": body.len(),
+            }))
+        };
+        let app = Router::new().route("/v1/audio/transcriptions", post(handler));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn multipart_transcription_upload_routes_by_its_model_field() {
+        let default_addr = spawn_named_upstream("default").await;
+        let stt_addr = spawn_named_upstream("stt").await;
+        let server = ProxyServer::start().unwrap();
+        server
+            .handle
+            .set_default(
+                target(format!("http://{default_addr}"), UpstreamAuth::Passthrough),
+                "default".to_string(),
+            )
+            .unwrap();
+        server
+            .handle
+            .register_route(
+                "granite-speech".to_string(),
+                target(format!("http://{stt_addr}"), UpstreamAuth::Passthrough),
+                "stt".to_string(),
+            )
+            .unwrap();
+
+        let body = multipart_body("XyZ123", true);
+        let sent_len = body.len();
+        let resp = reqwest::Client::new()
+            .post(format!(
+                "{}/v1/audio/transcriptions",
+                server.handle.local_base_url
+            ))
+            .header("content-type", "multipart/form-data; boundary=XyZ123")
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        let echoed: serde_json::Value = resp.json().await.unwrap();
+
+        assert_eq!(echoed["served_by"], "stt");
+        assert_eq!(echoed["model"], "granite-speech");
+        // The upload is forwarded byte for byte.
+        assert_eq!(echoed["body_len"], sent_len);
 
         server.shutdown().await;
     }
@@ -980,6 +1119,71 @@ mod tests {
     #[test]
     fn model_from_body_returns_none_for_missing_field() {
         assert_eq!(model_from_body(br#"{"messages": []}"#), None);
+    }
+
+    fn multipart_body(boundary: &str, model_first: bool) -> Vec<u8> {
+        let model = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngranite-speech\r\n"
+        );
+        let file = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\n\
+             Content-Type: audio/wav\r\n\r\n"
+        );
+        let mut body = Vec::new();
+        if model_first {
+            body.extend(model.as_bytes());
+        }
+        body.extend(file.as_bytes());
+        // Binary audio containing bytes that are not valid UTF-8.
+        body.extend([0xff, 0x00, 0xfe, b'-', b'-', 0x80]);
+        body.extend(b"\r\n");
+        if !model_first {
+            body.extend(model.as_bytes());
+        }
+        body.extend(format!("--{boundary}--\r\n").as_bytes());
+        body
+    }
+
+    #[test]
+    fn model_from_request_reads_multipart_model_field_before_or_after_the_file() {
+        let ct = Some("multipart/form-data; boundary=XyZ123");
+        for model_first in [true, false] {
+            assert_eq!(
+                model_from_request(ct, &multipart_body("XyZ123", model_first)).as_deref(),
+                Some("granite-speech"),
+                "model_first={model_first}"
+            );
+        }
+    }
+
+    #[test]
+    fn model_from_request_accepts_quoted_boundary_and_mixed_case() {
+        let ct = Some("Multipart/Form-Data; charset=utf-8; Boundary=\"XyZ123\"");
+        assert_eq!(
+            model_from_request(ct, &multipart_body("XyZ123", true)).as_deref(),
+            Some("granite-speech")
+        );
+    }
+
+    #[test]
+    fn model_from_request_without_a_model_field_is_none() {
+        let body = b"--b\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\n\r\nxx\r\n--b--\r\n";
+        assert_eq!(
+            model_from_request(Some("multipart/form-data; boundary=b"), body),
+            None
+        );
+    }
+
+    #[test]
+    fn model_from_request_still_reads_json_bodies() {
+        assert_eq!(
+            model_from_request(Some("application/json"), br#"{"model":"m"}"#).as_deref(),
+            Some("m")
+        );
+        assert_eq!(
+            model_from_request(None, br#"{"model":"m"}"#).as_deref(),
+            Some("m")
+        );
     }
 
     #[test]

@@ -259,7 +259,7 @@ mod base;
 pub(crate) use base::find_variant;
 pub(crate) use base::{
     ConfiguredModel, Model, ModelArchitecture, ModelFunction, ModelLookup, ModelMetadata,
-    ModelType, ModelVariant,
+    ModelType, ModelVariant, ReasoningEffort,
 };
 #[cfg(test)]
 pub(crate) use base::{LayerKind, LayerTypeCount};

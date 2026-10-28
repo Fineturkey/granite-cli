@@ -22,7 +22,7 @@ impl JsonOutput {
     /// Construct a capturing instance whose output can be read back via
     /// `captured()`. Used in tests only.
     #[cfg_attr(not(test), allow(dead_code))]
-    fn with_capture() -> Self {
+    pub(crate) fn with_capture() -> Self {
         let buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let writer: Box<dyn Write + Send> = Box::new(SharedWriter(Arc::clone(&buf)));
         Self {
@@ -34,7 +34,7 @@ impl JsonOutput {
     /// Return all emitted JSON objects in emission order.
     /// Panics if called on a non-capturing instance.
     #[cfg_attr(not(test), allow(dead_code))]
-    fn captured(&self) -> Vec<serde_json::Value> {
+    pub(crate) fn captured(&self) -> Vec<serde_json::Value> {
         let buf = self
             .buf
             .as_ref()
