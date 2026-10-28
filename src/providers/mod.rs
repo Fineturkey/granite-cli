@@ -153,24 +153,21 @@ impl crate::dependency::Configured<dyn Provider> for ProviderSource {
 
 mod base;
 pub(crate) use base::{
-    ApiEndpoint, ApiType, AuthType, HealthStatus, ModelFormat, Provider, ProviderError,
-    ProviderMetadata, ProviderType, PullResult,
+    ApiEndpoint, ApiType, HealthStatus, ModelFormat, Provider, ProviderError, ProviderMetadata,
+    ProviderType, PullResult,
 };
 
 mod openai;
-pub(crate) use openai::{OpenAIProvider, OpenAIProviderConfig};
+#[cfg(test)]
+pub(crate) use openai::OpenAIProvider;
 
 mod ollama;
-pub(crate) use ollama::{OllamaProvider, OllamaProviderConfig};
 
 mod llamacpp;
-pub(crate) use llamacpp::{LlamaCppProvider, LlamaCppProviderConfig};
 
 mod lmstudio;
-pub(crate) use lmstudio::{LMStudioProvider, LMStudioProviderConfig};
 
 mod openrouter;
-pub(crate) use openrouter::{OpenRouterProvider, OpenRouterProviderConfig};
 
 /*-- tests ---------------------------------------------------------------------*/
 

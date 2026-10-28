@@ -258,12 +258,13 @@ impl crate::dependency::Configured<dyn Model> for ModelSource {
 mod base;
 pub(crate) use base::find_variant;
 pub(crate) use base::{
-    ConfiguredModel, LayerKind, LayerTypeCount, MambaShape, Model, ModelArchitecture,
-    ModelFunction, ModelLookup, ModelMetadata, ModelType, ModelVariant,
+    ConfiguredModel, Model, ModelArchitecture, ModelFunction, ModelLookup, ModelMetadata,
+    ModelType, ModelVariant,
 };
+#[cfg(test)]
+pub(crate) use base::{LayerKind, LayerTypeCount};
 
 mod custom;
-pub(crate) use custom::CustomModelConfig;
 
 pub(crate) mod context_fit;
 pub(crate) use context_fit::{ContextFit, required_gb};

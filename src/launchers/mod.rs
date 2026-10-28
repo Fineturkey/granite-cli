@@ -118,13 +118,6 @@ pub(crate) mod pi;
 
 pub(crate) use base::resolve_and_bind;
 pub(crate) use base::{EnvBinding, LaunchContext, Launcher, LauncherMetadata};
-pub(crate) use bob::{BobLauncher, BobLauncherConfig};
-pub(crate) use claude::{ClaudeLauncher, ClaudeLauncherConfig};
-pub(crate) use goose::{GooseLauncher, GooseLauncherConfig};
-pub(crate) use hermes::{HermesLauncher, HermesLauncherConfig};
-pub(crate) use openclaw::{OpenClawLauncher, OpenClawLauncherConfig};
-pub(crate) use opencode::{OpenCodeLauncher, OpenCodeLauncherConfig};
-pub(crate) use pi::{PiLauncher, PiLauncherConfig};
 
 /*-- private shared modules --*/
 

@@ -9,7 +9,6 @@ pub(crate) mod ui;
 pub(crate) mod test_support;
 
 pub(crate) use capabilities::capability_model_ids;
-pub(crate) use hardware::{HardwareProfile, detect_hardware};
 pub(crate) use shell::resolve_shell_command;
 pub(crate) use traits::Searchable;
 pub(crate) use ui::prompt_from_schema;

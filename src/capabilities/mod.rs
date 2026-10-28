@@ -141,31 +141,28 @@ mod base;
 pub(crate) use crate::providers::ApiType;
 pub(crate) use base::{
     AgentModelBinding, AgentModelBindingRequest, Binding, BindingRequest, BindingType, Capability,
-    CapabilityInfo, CapabilityMetadata, Dependency, EnvBinding, KnownSubAgent, LaunchContext,
-    McpBinding, McpBindingRequest, McpTransportKind, ResolvedCapability, SubAgentBinding,
-    SubAgentBindingRequest, ToolName,
+    CapabilityInfo, CapabilityMetadata, Dependency, KnownSubAgent, McpBinding, McpBindingRequest,
+    McpTransportKind, ResolvedCapability, SubAgentBinding, SubAgentBindingRequest, ToolName,
 };
 
 mod requirement;
-pub(crate) use requirement::{ModelRequirement, ProviderRequirement, ShellCommandRequirement};
+#[cfg(test)]
+pub(crate) use requirement::ShellCommandRequirement;
+pub(crate) use requirement::{ModelRequirement, ProviderRequirement};
 
 mod agent_model;
-pub(crate) use agent_model::{AgentModelCapability, AgentModelCapabilityConfig};
 
 mod vision_mcp;
-pub(crate) use vision_mcp::{VisionMCPCapability, VisionMCPCapabilityConfig};
 
 mod sub_agent;
-pub(crate) use sub_agent::{SubAgentCapability, SubAgentCapabilityConfig};
+#[cfg(test)]
+pub(crate) use sub_agent::SubAgentCapabilityConfig;
 
 mod sub_agent_code;
-pub(crate) use sub_agent_code::{CodeSubAgentCapability, CodeSubAgentCapabilityConfig};
 
 mod sub_agent_explore;
-pub(crate) use sub_agent_explore::{ExploreSubAgentCapability, ExploreSubAgentCapabilityConfig};
 
 mod sub_agent_plan;
-pub(crate) use sub_agent_plan::{PlanSubAgentCapability, PlanSubAgentCapabilityConfig};
 
 /*-- tests ---------------------------------------------------------------------*/
 
