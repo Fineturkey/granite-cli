@@ -98,7 +98,7 @@ mod gpu {
     }
 
     #[cfg(target_os = "macos")]
-    fn detect_apple() -> Option<(Option<String>, Option<f64>)> {
+    pub(crate) fn detect_apple() -> Option<(Option<String>, Option<f64>)> {
         // MTLCreateSystemDefaultDevice requires CoreGraphics to be linked.
         #[link(name = "CoreGraphics", kind = "framework")]
         unsafe extern "C" {}
@@ -111,7 +111,7 @@ mod gpu {
     }
 
     #[cfg(target_os = "linux")]
-    fn detect_amd_linux() -> Option<(Option<String>, Option<f64>)> {
+    pub(crate) fn detect_amd_linux() -> Option<(Option<String>, Option<f64>)> {
         const AMD_VENDOR_ID: &str = "0x1002";
 
         let drm_dir = std::fs::read_dir("/sys/class/drm").ok()?;
