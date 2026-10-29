@@ -49,25 +49,25 @@ fn find_double_newline(buf: &[u8]) -> Option<usize> {
 /*-- llama.cpp Provider Configuration ----------------------------------------*/
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct LlamaCppProviderConfig {
+pub(crate) struct LlamaCppProviderConfig {
     /// Base URL for the llama.cpp server
     #[serde(default = "default_llamacpp_url")]
-    pub base_url: String,
+    pub(crate) base_url: String,
 
     /// API key for authentication (optional)
-    pub api_key: Option<Secret>,
+    pub(crate) api_key: Option<Secret>,
 
     /// Timeout for health checks in seconds
     #[serde(default = "default_timeout")]
-    pub timeout_secs: u64,
+    pub(crate) timeout_secs: u64,
 
     /// Whether to verify SSL certificates
     #[serde(default = "default_verify_ssl")]
-    pub verify_ssl: bool,
+    pub(crate) verify_ssl: bool,
 
     /// Endpoint to use for health checks
     #[serde(default = "default_llamacpp_health_endpoint")]
-    pub health_check_endpoint: String,
+    pub(crate) health_check_endpoint: String,
 }
 
 fn default_llamacpp_url() -> String {
@@ -100,7 +100,7 @@ impl Default for LlamaCppProviderConfig {
 
 /*-- llama.cpp Provider Implementation ---------------------------------------*/
 
-pub struct LlamaCppProvider {
+pub(crate) struct LlamaCppProvider {
     instance_id: String,
     config: LlamaCppProviderConfig,
     client: reqwest::Client,

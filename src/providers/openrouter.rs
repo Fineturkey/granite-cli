@@ -15,19 +15,19 @@ use crate::providers::base::{
 use crate::registry::{ConfigConstructable, ConstructError, Secret};
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct OpenRouterProviderConfig {
+pub(crate) struct OpenRouterProviderConfig {
     /// OpenRouter is one hosted service, so this has a default rather than
     /// being asked for: an instance that does not say otherwise talks to
     /// `https://openrouter.ai/api`.
     #[serde(default = "default_base_url")]
-    pub base_url: String,
-    pub api_key: Option<Secret>,
+    pub(crate) base_url: String,
+    pub(crate) api_key: Option<Secret>,
     #[serde(default = "default_timeout")]
-    pub timeout_secs: u64,
+    pub(crate) timeout_secs: u64,
     #[serde(default = "default_verify_ssl")]
-    pub verify_ssl: bool,
+    pub(crate) verify_ssl: bool,
     #[serde(default = "default_health_endpoint")]
-    pub health_check_endpoint: String,
+    pub(crate) health_check_endpoint: String,
 }
 
 fn default_timeout() -> u64 {
@@ -58,7 +58,7 @@ impl Default for OpenRouterProviderConfig {
     }
 }
 
-pub struct OpenRouterProvider {
+pub(crate) struct OpenRouterProvider {
     instance_id: String,
     config: OpenRouterProviderConfig,
     client: reqwest::Client,

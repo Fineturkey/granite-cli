@@ -14,9 +14,7 @@ use crate::commands::provider::ProviderCommands;
 use crate::config::recommended_config;
 use crate::dependency::{Configured, Requirement};
 use crate::launchers::LAUNCHER_REGISTRY;
-use crate::models::{
-    ContextFit, MODEL_REGISTRY, ModelFunction, ModelMetadata, ModelType, ModelVariant,
-};
+use crate::models::{ContextFit, MODEL_REGISTRY, ModelFunction, ModelMetadata, ModelVariant};
 use crate::providers::{HealthStatus, PROVIDER_REGISTRY, Provider};
 use crate::utils::hardware::{HardwareProfile, detect_hardware};
 
@@ -25,7 +23,7 @@ use_channel!("SETUP");
 /*-- public --*/
 
 /// A single recommendation produced during discovery.
-pub enum Recommendation {
+enum Recommendation {
     Provider {
         provider_type: &'static str,
         provider_name: String,
@@ -37,7 +35,6 @@ pub enum Recommendation {
         family: String,
         version: String,
         size: String,
-        model_type: ModelType,
         best_variant: ModelVariant,
         context_fit: ContextFit,
         can_run_by: Vec<String>,
@@ -54,17 +51,17 @@ pub enum Recommendation {
 }
 
 /// The complete output of the discovery engine.
-pub struct DiscoveryResult {
-    pub recommendations: Vec<Recommendation>,
+struct DiscoveryResult {
+    pub(crate) recommendations: Vec<Recommendation>,
     /// Every unconfigured model with at least a partial hardware fit, one
     /// entry per catalog model_id (not deduplicated by family/version like
     /// `recommendations` is). Used by the "choose different models" escape
     /// hatch so a user can see and pick models that don't fully fit.
-    pub all_model_candidates: Vec<Recommendation>,
-    pub configured_provider_ids: Vec<String>,
-    pub configured_model_ids: Vec<String>,
-    pub configured_launcher_ids: Vec<String>,
-    pub configured_capability_ids: Vec<String>,
+    all_model_candidates: Vec<Recommendation>,
+    configured_provider_ids: Vec<String>,
+    configured_model_ids: Vec<String>,
+    configured_launcher_ids: Vec<String>,
+    configured_capability_ids: Vec<String>,
 }
 
 /*-- private --*/
@@ -292,7 +289,6 @@ impl Discover {
             family: md.family.clone(),
             version: md.version.clone(),
             size: format_size(md.size),
-            model_type: md.model_type.clone(),
             best_variant: variant,
             context_fit: fit,
             can_run_by,
@@ -1168,13 +1164,17 @@ fn admits_for_recommendation(req: &ModelRequirement, md: &ModelMetadata) -> bool
 
 /*-- SetupCommands -----------------------------------------------------------*/
 
-pub struct SetupCommands;
+pub(crate) struct SetupCommands;
 
 impl SetupCommands {
     /// Entry point for `granite-cli setup`.
     /// `pull`: `Some(true)` => pull without prompting, `Some(false)` => skip
     /// pull, `None` => prompt in interactive mode / no pull in auto mode.
-    pub async fn run(ctx: &mut crate::AppContext, auto: bool, pull: Option<bool>) -> Result<()> {
+    pub(crate) async fn run(
+        ctx: &mut crate::AppContext,
+        auto: bool,
+        pull: Option<bool>,
+    ) -> Result<()> {
         if auto {
             Self::run_auto(ctx, pull).await
         } else {
@@ -2720,6 +2720,7 @@ fn summary_list(ids: &HashSet<String>) -> String {
 mod tests {
     use super::*;
     use crate::config::{Config, ModelConfig, ProviderConfig};
+    use crate::models::ModelType;
     use crate::utils::ui::base::tests::CaptureUi;
     use std::sync::Arc;
 
@@ -3307,7 +3308,6 @@ mod tests {
             family: md.family.clone(),
             version: md.version.clone(),
             size: format_size(md.size),
-            model_type: md.model_type.clone(),
             best_variant,
             context_fit: ContextFit::Full,
             can_run_by: vec![],
