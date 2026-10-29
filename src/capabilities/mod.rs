@@ -10,7 +10,7 @@ use crate::sources::SourceError;
 
 use_channel!("CAPBL");
 
-pub static CAPABILITY_REGISTRY: LazyLock<base::CapabilityFactory> = LazyLock::new(|| {
+pub(crate) static CAPABILITY_REGISTRY: LazyLock<base::CapabilityFactory> = LazyLock::new(|| {
     let mut factory = base::CapabilityFactory::new();
     factory.register::<agent_model::AgentModelCapability>("agent-model");
     factory.register::<speech_to_text::SpeechToTextCapability>("speech-to-text");
@@ -29,7 +29,7 @@ pub static CAPABILITY_REGISTRY: LazyLock<base::CapabilityFactory> = LazyLock::ne
 /// the first time one is asked for by its instance nickname
 /// (`capability_id`) rather than its catalog type (`capability_type`). The
 /// instance is kept, so every later ask for that id returns the same object.
-pub struct CapabilitySource {
+pub(crate) struct CapabilitySource {
     /// The settings for this kind, from the configuration snapshot the
     /// source was built from.
     configs: HashMap<String, crate::config::CapabilityConfig>,
@@ -57,7 +57,7 @@ impl CapabilitySource {
     /// entry is configured under that id, when its `capability_type` is not
     /// in the registry, when its settings are not valid, or when the model it
     /// names does not resolve or does not meet what its type requires.
-    pub fn get(
+    pub(crate) fn get(
         &self,
         capability_id: &str,
     ) -> anyhow::Result<std::sync::Arc<dyn ResolvedCapability>> {
@@ -140,40 +140,36 @@ impl crate::dependency::Configured<dyn ResolvedCapability> for CapabilitySource 
 /*-- Module Declarations -----------------------------------------------------*/
 
 mod base;
-pub use crate::providers::ApiType;
-pub use base::{
+pub(crate) use crate::providers::ApiType;
+pub(crate) use base::{
     AgentModelBinding, AgentModelBindingRequest, Binding, BindingRequest, BindingType, Capability,
-    CapabilityInfo, CapabilityMetadata, Dependency, EnvBinding, KnownSubAgent, LaunchContext,
-    McpBinding, McpBindingRequest, McpTransportKind, ResolvedCapability, SubAgentBinding,
-    SubAgentBindingRequest, ToolName, VoiceInputBinding, VoiceInputBindingRequest,
+    CapabilityInfo, CapabilityMetadata, Dependency, KnownSubAgent, McpBinding, McpBindingRequest,
+    McpTransportKind, ResolvedCapability, SubAgentBinding, SubAgentBindingRequest, ToolName,
+    VoiceInputBinding, VoiceInputBindingRequest,
 };
 
 mod requirement;
-pub use requirement::{ModelRequirement, ProviderRequirement, ShellCommandRequirement};
+#[cfg(test)]
+pub(crate) use requirement::ShellCommandRequirement;
+pub(crate) use requirement::{ModelRequirement, ProviderRequirement};
 
 mod agent_model;
-pub use agent_model::{AgentModelCapability, AgentModelCapabilityConfig};
 
 mod speech_to_text;
-pub use speech_to_text::{SpeechToTextCapability, SpeechToTextCapabilityConfig};
 
 mod mcp_server;
-pub use mcp_server::{McpServerCapability, McpServerCapabilityConfig};
 
 mod vision_mcp;
-pub use vision_mcp::{VisionMCPCapability, VisionMCPCapabilityConfig};
 
 mod sub_agent;
-pub use sub_agent::{SubAgentCapability, SubAgentCapabilityConfig};
+#[cfg(test)]
+pub(crate) use sub_agent::SubAgentCapabilityConfig;
 
 mod sub_agent_code;
-pub use sub_agent_code::{CodeSubAgentCapability, CodeSubAgentCapabilityConfig};
 
 mod sub_agent_explore;
-pub use sub_agent_explore::{ExploreSubAgentCapability, ExploreSubAgentCapabilityConfig};
 
 mod sub_agent_plan;
-pub use sub_agent_plan::{PlanSubAgentCapability, PlanSubAgentCapabilityConfig};
 
 /*-- tests ---------------------------------------------------------------------*/
 

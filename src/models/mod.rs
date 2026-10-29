@@ -12,7 +12,7 @@ use_channel!("MODEL");
 
 /*-- Public API --------------------------------------------------------------*/
 
-pub static MODEL_REGISTRY: LazyLock<base::ModelFactory> = LazyLock::new(|| {
+pub(crate) static MODEL_REGISTRY: LazyLock<base::ModelFactory> = LazyLock::new(|| {
     let mut factory = base::ModelFactory::new();
     register_all_models(&mut factory);
     factory.register::<custom::CustomModel>("custom");
@@ -27,7 +27,7 @@ pub static MODEL_REGISTRY: LazyLock<base::ModelFactory> = LazyLock::new(|| {
 /// (`ModelConfig.model_type`), so the same catalog type can be configured
 /// more than once. The instance is kept, so every later ask for that id
 /// returns the same object.
-pub struct ModelSource {
+pub(crate) struct ModelSource {
     /// The settings for this kind, from the configuration snapshot the
     /// source was built from.
     configs: HashMap<String, crate::config::ModelConfig>,
@@ -53,7 +53,7 @@ impl ModelSource {
     /// a model that is not configured at all from one whose `provider_id`
     /// resolves to nothing, which `Model::provider()`'s single "model has no
     /// configured provider" could not express.
-    pub fn provider_for(
+    pub(crate) fn provider_for(
         &self,
         model_id: &str,
     ) -> anyhow::Result<Arc<dyn crate::providers::Provider>> {
@@ -72,7 +72,7 @@ impl ModelSource {
     /// The same provider carrying its real connection details, whether or
     /// not a session proxy is running. The launch reads a route's upstream
     /// target from here.
-    pub fn upstream_for(
+    pub(crate) fn upstream_for(
         &self,
         model_id: &str,
     ) -> anyhow::Result<Arc<dyn crate::providers::Provider>> {
@@ -92,7 +92,7 @@ impl ModelSource {
 
     /// The `"format/precision"` string the model configured under `model_id`
     /// was pinned to, if any.
-    pub fn configured_variant(&self, model_id: &str) -> Option<String> {
+    pub(crate) fn configured_variant(&self, model_id: &str) -> Option<String> {
         self.configs.get(model_id).and_then(|mc| mc.variant.clone())
     }
 
@@ -102,7 +102,7 @@ impl ModelSource {
     /// cache on every one after it, so two capabilities naming one model
     /// share one object. Errors when no entry is configured under that id, or
     /// when its `model_type` is not in the registry.
-    pub fn get(&self, model_id: &str) -> anyhow::Result<Arc<dyn Model>> {
+    pub(crate) fn get(&self, model_id: &str) -> anyhow::Result<Arc<dyn Model>> {
         self.build(model_id).map_err(|e| e.about("model", model_id))
     }
 
@@ -257,18 +257,19 @@ impl crate::dependency::Configured<dyn Model> for ModelSource {
 // Re-export types from base
 mod base;
 pub(crate) use base::find_variant;
-pub use base::{
-    ConfiguredModel, LayerKind, LayerTypeCount, MambaShape, Model, ModelArchitecture,
-    ModelFunction, ModelLookup, ModelMetadata, ModelType, ModelVariant, ReasoningEffort,
+pub(crate) use base::{
+    ConfiguredModel, Model, ModelArchitecture, ModelFunction, ModelLookup, ModelMetadata,
+    ModelType, ModelVariant, ReasoningEffort,
 };
+#[cfg(test)]
+pub(crate) use base::{LayerKind, LayerTypeCount};
 
 mod custom;
-pub use custom::CustomModelConfig;
 
 pub(crate) mod context_fit;
-pub use context_fit::{ContextFit, required_gb};
+pub(crate) use context_fit::{ContextFit, required_gb};
 
-pub mod huggingface;
+pub(crate) mod huggingface;
 
 /*-- tests -------------------------------------------------------------------*/
 
