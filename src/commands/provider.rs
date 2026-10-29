@@ -546,7 +546,7 @@ mod tests {
             .find(|row| row[0] == "openai-compatible")
             .unwrap();
 
-        assert_eq!(llama_cpp[3], "http://localhost:8080, http://localhost:9931");
+        assert_eq!(llama_cpp[3], "http://localhost:9931, http://localhost:8080");
         assert_eq!(openai[3], "-");
     }
 

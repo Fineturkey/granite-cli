@@ -509,7 +509,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = LlamaCppProviderConfig::default();
-        assert_eq!(config.base_url, "http://localhost:8080");
+        assert_eq!(config.base_url, "http://localhost:9931");
         assert!(config.api_key.is_none());
         assert_eq!(config.timeout_secs, 10);
         assert!(config.verify_ssl);
