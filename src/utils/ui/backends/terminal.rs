@@ -19,7 +19,7 @@ use crate::utils::ui::base::{HasUiMetadata, PullHandle, Ui, UiMetadata};
 ///
 /// If stdout is not a tty (pipe, file redirect, CI — detected via
 /// `crossterm::terminal::size()`) every method delegates to `PlainOutput`.
-pub struct TerminalOutput {
+pub(crate) struct TerminalOutput {
     is_tty: bool,
     terminal_width: Option<u16>,
     next_pull_handle: AtomicU64,
@@ -880,5 +880,16 @@ mod tests {
         let rows: Vec<Vec<String>> = vec![];
         let widths = vec![8, 8];
         render_rows_with_wrapping(&rows, &widths);
+    }
+
+    #[test]
+    fn is_interactive_follows_stdin_and_stderr() {
+        use std::io::IsTerminal;
+        let out = TerminalOutput::new("terminal", &serde_json::json!({})).unwrap();
+        let expected = crate::utils::ui::base::can_prompt(
+            std::io::stdin().is_terminal(),
+            std::io::stderr().is_terminal(),
+        );
+        assert_eq!(out.is_interactive(), expected);
     }
 }

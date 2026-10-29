@@ -5,7 +5,7 @@ use crate::utils::ui::base::{HasUiMetadata, Ui, UiMetadata};
 
 /// Plain text backend with no ANSI codes.
 /// Suitable for CI, piped output, and non-ANSI terminals.
-pub struct PlainOutput;
+pub(crate) struct PlainOutput;
 
 impl ConfigConstructable for PlainOutput {
     type Config = NoConfig;
@@ -135,4 +135,15 @@ mod tests {
     use super::*;
 
     crate::output_contract_tests!(PlainOutput::new("plain", &serde_json::json!({}),).unwrap());
+
+    #[test]
+    fn is_interactive_follows_stdin_and_stderr() {
+        use std::io::IsTerminal;
+        let out = PlainOutput::new("plain", &serde_json::json!({})).unwrap();
+        let expected = crate::utils::ui::base::can_prompt(
+            std::io::stdin().is_terminal(),
+            std::io::stderr().is_terminal(),
+        );
+        assert_eq!(out.is_interactive(), expected);
+    }
 }

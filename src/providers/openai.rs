@@ -12,35 +12,35 @@ use std::time::{Duration, Instant};
 /*-- OpenAI Provider Configuration -------------------------------------------*/
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct OpenAIProviderConfig {
+pub(crate) struct OpenAIProviderConfig {
     /// Base URL for the OpenAI-compatible API
-    pub base_url: String,
+    pub(crate) base_url: String,
 
     /// API key for authentication (optional for local providers)
-    pub api_key: Option<Secret>,
+    pub(crate) api_key: Option<Secret>,
 
     /// Timeout for health checks in seconds
     #[serde(default = "default_timeout")]
-    pub timeout_secs: u64,
+    pub(crate) timeout_secs: u64,
 
     /// Whether to verify SSL certificates
     #[serde(default = "default_verify_ssl")]
-    pub verify_ssl: bool,
+    pub(crate) verify_ssl: bool,
 
     /// Endpoint to use for health checks
     #[serde(default = "default_health_endpoint")]
-    pub health_check_endpoint: String,
+    pub(crate) health_check_endpoint: String,
 
     /// Specific function-to-endpoint mappings this instance supports.
     /// If None, will use default OpenAI mappings.
-    pub function_endpoints: Option<HashMap<ModelFunction, Vec<ApiEndpoint>>>,
+    pub(crate) function_endpoints: Option<HashMap<ModelFunction, Vec<ApiEndpoint>>>,
 
     /// Custom HTTP headers to be sent with each API request.
     /// Keys are header names (strings) and values are secret tokens.
-    pub custom_headers: Option<HashMap<String, Secret>>,
+    pub(crate) custom_headers: Option<HashMap<String, Secret>>,
 
     /// Per-model alias mapping.
-    pub model_aliases: Option<HashMap<String, String>>,
+    model_aliases: Option<HashMap<String, String>>,
 }
 
 fn default_timeout() -> u64 {
@@ -72,7 +72,7 @@ impl Default for OpenAIProviderConfig {
 
 /*-- OpenAI Provider Implementation ------------------------------------------*/
 
-pub struct OpenAIProvider {
+pub(crate) struct OpenAIProvider {
     instance_id: String,
     config: OpenAIProviderConfig,
     client: reqwest::Client,

@@ -64,36 +64,36 @@ macro_rules! impl_parse_image {
 /*-- Tool argument types ------------------------------------------------------------*/
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct ImageSourceArgs {
+struct ImageSourceArgs {
     #[schemars(
         description = "Image source type: 'file' (path), 'base64' (data), or 'url' (HTTP(S))"
     )]
-    pub source_type: String,
+    source_type: String,
     /// The image: file path, base64-encoded data, or HTTP(S) URL
-    pub image: String,
+    image: String,
 }
 impl_parse_image!(ImageSourceArgs);
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct CompareImagesArgs {
+struct CompareImagesArgs {
     /// Array of image sources to compare (minimum 2)
-    pub images: Vec<ImageSourceArgs>,
+    images: Vec<ImageSourceArgs>,
     /// Optional free-text instruction
-    pub prompt: Option<String>,
+    pub(crate) prompt: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct AnalyzeArgs {
+struct AnalyzeArgs {
     #[schemars(description = "Image source type: 'file', 'base64', or 'url'")]
-    pub source_type: String,
-    pub image: String,
+    source_type: String,
+    image: String,
     #[schemars(
         description = "Analysis type: 'object-detection', 'text-extraction', 'scene-description', 'ui-analysis', or 'custom'"
     )]
-    pub analysis_type: String,
+    analysis_type: String,
     /// Optional instruction (required when analysis_type == 'custom')
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub prompt: Option<String>,
+    pub(crate) prompt: Option<String>,
 }
 impl_parse_image!(AnalyzeArgs);
 
@@ -101,12 +101,12 @@ impl_parse_image!(AnalyzeArgs);
 
 /// Wraps a VLM backend and exposes it as MCP tools via `#[tool_router]`.
 #[derive(Debug, Clone)]
-pub struct VlmToolRegistry {
+pub(crate) struct VlmToolRegistry {
     vlm: Arc<dyn VlmBackend>,
 }
 
 impl VlmToolRegistry {
-    pub fn new(vlm: Arc<dyn VlmBackend>) -> Self {
+    pub(crate) fn new(vlm: Arc<dyn VlmBackend>) -> Self {
         Self { vlm }
     }
 }

@@ -15,25 +15,25 @@ use std::time::Duration;
 /*-- Ollama Provider Configuration -------------------------------------------*/
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct OllamaProviderConfig {
+pub(crate) struct OllamaProviderConfig {
     /// Base URL for the Ollama API
     #[serde(default = "default_ollama_url")]
-    pub base_url: String,
+    pub(crate) base_url: String,
 
     /// API key for authentication (optional)
-    pub api_key: Option<Secret>,
+    pub(crate) api_key: Option<Secret>,
 
     /// Timeout for health checks in seconds
     #[serde(default = "default_timeout")]
-    pub timeout_secs: u64,
+    pub(crate) timeout_secs: u64,
 
     /// Whether to verify SSL certificates
     #[serde(default = "default_verify_ssl")]
-    pub verify_ssl: bool,
+    pub(crate) verify_ssl: bool,
 
     /// Endpoint to use for health checks
     #[serde(default = "default_ollama_health_endpoint")]
-    pub health_check_endpoint: String,
+    pub(crate) health_check_endpoint: String,
 }
 
 fn default_ollama_url() -> String {
@@ -66,7 +66,7 @@ impl Default for OllamaProviderConfig {
 
 /*-- Ollama Provider Implementation ------------------------------------------*/
 
-pub struct OllamaProvider {
+pub(crate) struct OllamaProvider {
     instance_id: String,
     config: OllamaProviderConfig,
     client: reqwest::Client,

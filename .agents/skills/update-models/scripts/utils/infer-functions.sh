@@ -54,6 +54,20 @@ else
     if [ "$supports_thinking" = "true" ]; then
         functions+=("Thinking")
     fi
+
+    # Granite Switch models bundle named adapters (config.json
+    # `adapter_names`). The names are free-form strings, not an enum, so
+    # match them heuristically (case-insensitive substring). Not every
+    # Switch model ships these adapters, so each function is opt-in.
+    #   *decision*  -> Decision  (e.g. "decision")
+    #   *guardian*  -> Guardian  (e.g. "guardian-core")
+    adapter_names=$(echo "$model" | jq -r '(.config.adapter_names // []) | map(ascii_downcase) | .[]')
+    if echo "$adapter_names" | grep -q 'decision'; then
+        functions+=("Decision")
+    fi
+    if echo "$adapter_names" | grep -q 'guardian'; then
+        functions+=("Guardian")
+    fi
 fi
 
 # Output as JSON array

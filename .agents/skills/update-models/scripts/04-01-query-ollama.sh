@@ -56,7 +56,11 @@ map_to_ollama() {
     # Map to Ollama naming convention
     local ollama_names=()
 
-    if [[ "$name" == *"vision"* ]]; then
+    if [[ "$family" == "Granite Switch" || "$name" == *"switch"* ]]; then
+        # Granite Switch is a distinct composite model that isn't published
+        # on Ollama; don't match it to the same-versioned granite${version}.
+        ollama_names=()
+    elif [[ "$name" == *"vision"* ]]; then
         ollama_names=("granite${version}-vision")
     elif [[ "$name" == *"guardian"* ]]; then
         ollama_names=("granite${version}-guardian")

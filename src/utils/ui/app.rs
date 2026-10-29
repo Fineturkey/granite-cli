@@ -8,7 +8,9 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, TableState},
+    widgets::{
+        Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, TableState, Wrap,
+    },
 };
 
 use crate::commands::{
@@ -115,7 +117,7 @@ impl ModelEntry {
 /*-- public --*/
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Section {
+enum Section {
     Models,
     Providers,
     Launchers,
@@ -164,7 +166,7 @@ impl Section {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum AppMode {
+enum AppMode {
     Browse,
     Search(String),
     Detail(String),
@@ -178,12 +180,28 @@ pub enum AppMode {
         /// Currently highlighted item index (0 = "New instance", 1..N = existing).
         cursor: usize,
     },
+    /// Launch picker: user selects an existing configured launcher instance to launch.
+    LaunchPick {
+        /// The launcher type id (e.g. "bob").
+        type_id: String,
+        /// Sorted list of configured launcher instance ids.
+        instances: Vec<String>,
+        /// Currently highlighted instance index (0..instances.len()-1).
+        cursor: usize,
+    },
+    /// Confirmation dialog before launching a launcher instance and closing the TUI.
+    LaunchConfirm {
+        /// The launcher instance id to be launched.
+        instance_id: String,
+        /// Whether "Yes" is currently selected (defaults to true).
+        yes: bool,
+    },
 }
 
 /// Action returned by [`App::handle_key`] to drive the event loop in
 /// [`run_interactive_tui`].
 #[derive(Debug, Clone, PartialEq)]
-pub enum AppAction {
+enum AppAction {
     /// No special action; keep running the TUI.
     None,
     /// User requested quit.
@@ -192,41 +210,43 @@ pub enum AppAction {
     /// `instance_id` is `Some(id)` when editing an existing instance or
     /// `None` when creating a new one.
     StartSetup(Section, String, Option<String>),
+    /// Launch a configured launcher instance. Carries the launcher instance ID.
+    Launch(String),
 }
 
-pub struct App {
-    pub ctx: crate::AppContext,
-    pub section: Section,
-    pub row: usize,
-    pub mode: AppMode,
+struct App {
+    pub(crate) ctx: crate::AppContext,
+    section: Section,
+    pub(crate) row: usize,
+    pub(crate) mode: AppMode,
     table_state: TableState,
-    pub detail_scroll: usize,
+    detail_scroll: usize,
     /// Cached once at startup — recomputing this requires `detect_hardware()`
     /// (DXGI/NVML/Metal calls) on every render, which is the main cause of
     /// sluggish arrow-key navigation on Windows.
     recommend_rows_cache: Vec<Vec<String>>,
     /// Active in-pane setup wizard, if one is running.
-    pub setup_pane: Option<SetupPane>,
+    setup_pane: Option<SetupPane>,
     /// Per-section toggle: when true, only rows whose catalog type has at least
     /// one configured instance are shown.  Defaults to true for a section when
     /// it has any configured instances at startup, false otherwise.
     /// Indices: 0=Models, 1=Providers, 2=Launchers, 3=Capabilities.
-    pub configured_only: [bool; 4],
+    configured_only: [bool; 4],
     /// Cached list of session metadata loaded from disk, newest-first.
     /// Reloaded on each idle tick when the Sessions section is active.
-    pub sessions: Vec<crate::session::SessionMeta>,
+    pub(crate) sessions: Vec<crate::session::SessionMeta>,
     /// When true (default), sessions with `finished_at` set are hidden.
-    pub hide_inactive: bool,
+    hide_inactive: bool,
     /// Per-section committed search query (set when Enter is pressed in Search
     /// mode). Kept so Browse mode continues to show filtered results after
     /// the user commits a search — Esc clears the current section's slot.
     /// Indices: 0=Models, 1=Providers, 2=Launchers, 3=Capabilities, 4=Recommend.
     /// Sessions and Hardware are not searchable and have no slot.
-    pub active_search: [String; 5],
+    active_search: [String; 5],
 }
 
 impl App {
-    pub fn new(ctx: crate::AppContext) -> Self {
+    pub(crate) fn new(ctx: crate::AppContext) -> Self {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
         let recommend_rows_cache = {
@@ -268,14 +288,14 @@ impl App {
     }
 
     /// Handle a key event and return an [`AppAction`].
-    pub fn handle_key(&mut self, key: KeyEvent) -> AppAction {
+    pub(crate) fn handle_key(&mut self, key: KeyEvent) -> AppAction {
         // Ctrl-C always quits from any mode
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             return AppAction::Quit;
         }
 
-        // For InstancePick we need mutable access to the cursor field
-        // without borrowing self entirely, so handle it before the clone-based
+        // For InstancePick, LaunchPick, and LaunchConfirm we need mutable access
+        // without borrowing self entirely, so handle them before the clone-based
         // match that drives the other modes.
         if let AppMode::InstancePick {
             ref type_id,
@@ -286,16 +306,13 @@ impl App {
             match key.code {
                 KeyCode::Esc => {
                     self.mode = AppMode::Browse;
-                    return AppAction::None;
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
                     let max = instances.len();
                     *cursor = (*cursor + 1).min(max);
-                    return AppAction::None;
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
                     *cursor = cursor.saturating_sub(1);
-                    return AppAction::None;
                 }
                 KeyCode::Enter => {
                     let instance_id = if *cursor == 0 {
@@ -308,8 +325,73 @@ impl App {
                     self.mode = AppMode::Browse;
                     return AppAction::StartSetup(section, type_id, instance_id);
                 }
-                _ => return AppAction::None,
+                _ => {}
             }
+            return AppAction::None;
+        }
+
+        if let AppMode::LaunchPick {
+            ref instances,
+            ref mut cursor,
+            ..
+        } = self.mode
+        {
+            match key.code {
+                KeyCode::Esc => {
+                    self.mode = AppMode::Browse;
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let max = instances.len().saturating_sub(1);
+                    *cursor = (*cursor + 1).min(max);
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    *cursor = cursor.saturating_sub(1);
+                }
+                KeyCode::Enter | KeyCode::Char('l') if !instances.is_empty() => {
+                    let instance_id = instances[*cursor].clone();
+                    self.mode = AppMode::LaunchConfirm {
+                        instance_id,
+                        yes: true,
+                    };
+                }
+                _ => {}
+            }
+            return AppAction::None;
+        }
+
+        if let AppMode::LaunchConfirm {
+            ref instance_id,
+            ref mut yes,
+        } = self.mode
+        {
+            match key.code {
+                KeyCode::Esc => {
+                    self.mode = AppMode::Browse;
+                }
+                KeyCode::Left
+                | KeyCode::Char('h')
+                | KeyCode::Right
+                | KeyCode::Char('l')
+                | KeyCode::Tab => {
+                    *yes = !*yes;
+                }
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    *yes = true;
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') => {
+                    *yes = false;
+                }
+                KeyCode::Enter => {
+                    let should_launch = *yes;
+                    let id = instance_id.clone();
+                    self.mode = AppMode::Browse;
+                    if should_launch {
+                        return AppAction::Launch(id);
+                    }
+                }
+                _ => {}
+            }
+            return AppAction::None;
         }
 
         match self.mode.clone() {
@@ -317,13 +399,13 @@ impl App {
                 KeyCode::Char('q') => return AppAction::Quit,
                 KeyCode::Esc => {
                     // If a filter is active for this section, clear it instead of quitting.
-                    if let Some(i) = Self::active_search_idx(&self.section) {
-                        if !self.active_search[i].is_empty() {
-                            self.active_search[i] = String::new();
-                            self.row = 0;
-                            self.sync_table_state();
-                            return AppAction::None;
-                        }
+                    if let Some(i) = Self::active_search_idx(&self.section)
+                        && !self.active_search[i].is_empty()
+                    {
+                        self.active_search[i] = String::new();
+                        self.row = 0;
+                        self.sync_table_state();
+                        return AppAction::None;
                     }
                     return AppAction::Quit;
                 }
@@ -370,6 +452,14 @@ impl App {
                         let max = self.row_count().saturating_sub(1);
                         self.row = self.row.min(max);
                         self.sync_table_state();
+                    }
+                }
+                KeyCode::Char('l') => {
+                    // Launch a configured launcher instance directly from Browse mode
+                    if self.section == Section::Launchers
+                        && let Some(id) = self.selected_id()
+                    {
+                        self.initiate_launch(&id);
                     }
                 }
                 _ => {}
@@ -446,16 +536,23 @@ impl App {
                         return AppAction::StartSetup(self.section.clone(), id, None);
                     }
                 }
+                KeyCode::Char('l')
+                    // Launch a configured launcher instance (Launchers section only)
+                    if self.section == Section::Launchers => {
+                        self.initiate_launch(id);
+                    }
                 _ => {}
             },
-            // InstancePick is handled above before the clone-based match.
-            AppMode::InstancePick { .. } => {}
+            // InstancePick, LaunchPick, and LaunchConfirm are handled above before the clone-based match.
+            AppMode::InstancePick { .. }
+            | AppMode::LaunchPick { .. }
+            | AppMode::LaunchConfirm { .. } => {}
         }
         AppAction::None
     }
 
     /// Render the full application layout into the given frame.
-    pub fn render(&mut self, frame: &mut Frame) {
+    pub(crate) fn render(&mut self, frame: &mut Frame) {
         let area = frame.area();
 
         // Outer layout: content + footer
@@ -491,6 +588,15 @@ impl App {
                     ref instances,
                     cursor,
                 } => self.render_instance_pick(frame, inner[1], type_id, instances, cursor),
+                AppMode::LaunchPick {
+                    ref type_id,
+                    ref instances,
+                    cursor,
+                } => self.render_launch_pick(frame, inner[1], type_id, instances, cursor),
+                AppMode::LaunchConfirm {
+                    ref instance_id,
+                    yes,
+                } => self.render_launch_confirm(frame, inner[1], instance_id, yes),
             }
         }
         self.render_footer(frame, outer[1]);
@@ -509,12 +615,11 @@ impl App {
         if let Ok(entries) = fs::read_dir(&dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().is_some_and(|ext| ext == "yaml") {
-                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                        if let Ok(meta) = crate::session::read_session_file(stem) {
-                            sessions.push(meta);
-                        }
-                    }
+                if path.extension().is_some_and(|ext| ext == "yaml")
+                    && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+                    && let Ok(meta) = crate::session::read_session_file(stem)
+                {
+                    sessions.push(meta);
                 }
             }
         }
@@ -1660,7 +1765,7 @@ impl App {
                             .borders(Borders::ALL)
                             .title(" Hardware Profile "),
                     )
-                    .wrap(ratatui::widgets::Wrap { trim: false })
+                    .wrap(Wrap { trim: false })
                     .scroll((self.detail_scroll as u16, 0));
                 frame.render_widget(para, table_area);
             }
@@ -1799,7 +1904,7 @@ impl App {
                                 .borders(Borders::ALL)
                                 .title(format!(" {id} — Session Detail ")),
                         )
-                        .wrap(ratatui::widgets::Wrap { trim: false })
+                        .wrap(Wrap { trim: false })
                         .scroll((self.detail_scroll as u16, 0));
                     frame.render_widget(meta_para, chunks[0]);
 
@@ -2196,7 +2301,7 @@ impl App {
                     .borders(Borders::ALL)
                     .title(format!(" {id} — Detail ")),
             )
-            .wrap(ratatui::widgets::Wrap { trim: false })
+            .wrap(Wrap { trim: false })
             .scroll((self.detail_scroll as u16, 0));
         frame.render_widget(para, area);
     }
@@ -2240,6 +2345,14 @@ impl App {
                         hidden: self.hide_inactive,
                     });
                 }
+                // Show [l] Launch only on Launchers section AND when the selected
+                // launcher type has configured instances
+                if self.section == Section::Launchers
+                    && let Some(id) = self.selected_id()
+                    && self.existing_instances(&id).is_some()
+                {
+                    hints.push(Hint::Launch);
+                }
                 hints.push(Hint::Quit);
                 if matches!(
                     self.section,
@@ -2256,9 +2369,21 @@ impl App {
             AppMode::Search(_) => {
                 vec![Hint::Typing("Filter"), Hint::Confirm, Hint::Cancel]
             }
-            AppMode::Detail(_) => vec![Hint::Scroll, Hint::Open("Setup"), Hint::Back],
+            AppMode::Detail(id) => {
+                if self.section == Section::Launchers && self.existing_instances(id).is_some() {
+                    vec![Hint::Scroll, Hint::Open("Setup"), Hint::Launch, Hint::Back]
+                } else {
+                    vec![Hint::Scroll, Hint::Open("Setup"), Hint::Back]
+                }
+            }
             AppMode::InstancePick { .. } => {
                 vec![Hint::Move, Hint::Open("Select"), Hint::Cancel]
+            }
+            AppMode::LaunchPick { .. } => {
+                vec![Hint::Move, Hint::Open("Select"), Hint::Cancel]
+            }
+            AppMode::LaunchConfirm { .. } => {
+                vec![Hint::ConfirmYN, Hint::Confirm, Hint::Cancel]
             }
         }
     }
@@ -2313,6 +2438,25 @@ impl App {
         Some(instances)
     }
 
+    /// Transitions to `LaunchConfirm` (if single instance) or `LaunchPick` (if multiple instances)
+    /// for the given launcher type.
+    fn initiate_launch(&mut self, type_id: &str) {
+        if let Some(instances) = self.existing_instances(type_id) {
+            if instances.len() == 1 {
+                self.mode = AppMode::LaunchConfirm {
+                    instance_id: instances[0].clone(),
+                    yes: true,
+                };
+            } else if instances.len() > 1 {
+                self.mode = AppMode::LaunchPick {
+                    type_id: type_id.to_string(),
+                    instances,
+                    cursor: 0,
+                };
+            }
+        }
+    }
+
     /// Render the instance picker list for `InstancePick` mode.
     fn render_instance_pick(
         &self,
@@ -2351,10 +2495,113 @@ impl App {
         list_state.select(Some(cursor));
         frame.render_stateful_widget(list, area, &mut list_state);
     }
+
+    const CONFIRM_LAUNCH_TITLE: &str = "Confirm Launch";
+    const LAUNCH_PICK_TITLE_SUFFIX: &str = "Launch instance";
+
+    /// Build the confirmation message shown in `LaunchConfirm` mode.
+    /// `details` is the pre-formatted launcher detail string, or empty when the
+    /// instance id is unknown.
+    fn launch_confirm_message(instance_id: &str, details: &str) -> String {
+        if details.is_empty() {
+            format!(
+                "You're about to launch \"{instance_id}\" and close the granite-cli TUI. Proceed?"
+            )
+        } else {
+            format!(
+                "You're about to launch \"{instance_id}\" ({details}) and close the granite-cli TUI. Proceed?"
+            )
+        }
+    }
+
+    /// Render the launch picker list for `LaunchPick` mode.
+    fn render_launch_pick(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        type_id: &str,
+        instances: &[String],
+        cursor: usize,
+    ) {
+        let list_items: Vec<ListItem> = instances
+            .iter()
+            .enumerate()
+            .map(|(i, label)| {
+                let prefix = if i == cursor { "▶ " } else { "  " };
+                let style = if i == cursor {
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(Line::from(Span::styled(format!("{prefix}{label}"), style)))
+            })
+            .collect();
+
+        let list = List::new(list_items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" {type_id} — {} ", Self::LAUNCH_PICK_TITLE_SUFFIX)),
+        );
+        let mut list_state = ListState::default();
+        list_state.select(Some(cursor));
+        frame.render_stateful_widget(list, area, &mut list_state);
+    }
+
+    /// Render the launch confirmation dialog for `LaunchConfirm` mode.
+    fn render_launch_confirm(&self, frame: &mut Frame, area: Rect, instance_id: &str, yes: bool) {
+        let yes_style = if yes {
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        let no_style = if !yes {
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        let details = if let Some(lc) = self.ctx.config().get_launcher(instance_id) {
+            let caps = if lc.enabled_capabilities.is_empty() {
+                "(none)".to_string()
+            } else {
+                lc.enabled_capabilities.join(", ")
+            };
+            format!("type: {}, capabilities: {}", lc.launcher_type, caps)
+        } else {
+            String::new()
+        };
+
+        let message = Self::launch_confirm_message(instance_id, &details);
+
+        let lines = vec![
+            Line::from(message),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled(if yes { "▶ Yes " } else { "  Yes " }, yes_style),
+                Span::raw("   "),
+                Span::styled(if !yes { "▶ No " } else { "  No " }, no_style),
+            ]),
+        ];
+
+        let para = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" {} ", Self::CONFIRM_LAUNCH_TITLE)),
+        );
+        frame.render_widget(para, area);
+    }
 }
 
 /// Launch the interactive TUI application. Runs until the user quits.
-pub async fn run_interactive_tui(ctx: crate::AppContext) -> anyhow::Result<()> {
+pub(crate) async fn run_interactive_tui(
+    ctx: crate::AppContext,
+    log_level: alog::Level,
+    log_filters: &str,
+) -> anyhow::Result<()> {
     // Silence the global logger for the entire TUI session.  The logger is
     // wired to TerminalOutput which calls println! directly — any log line
     // emitted from a setup task thread would write to stdout while ratatui
@@ -2426,11 +2673,20 @@ pub async fn run_interactive_tui(ctx: crate::AppContext) -> anyhow::Result<()> {
             AppAction::StartSetup(section, id, instance_id) => {
                 app.setup_pane = Some(spawn_setup(&app.ctx, &section, &id, instance_id.as_deref()));
             }
+            AppAction::Launch(launcher_id) => {
+                // Restore terminal before launching
+                restore_terminal(terminal)?;
+                alog::adjust_levels(log_level, AlogFilters::Spec(log_filters.to_string()));
+                // Run the launch command (takes ownership of the context)
+                let mut ctx = app.ctx;
+                return crate::run_launch(&mut ctx, &launcher_id, &[], false).await;
+            }
             AppAction::None => {}
         }
     }
 
     restore_terminal(terminal)?;
+    alog::adjust_levels(log_level, AlogFilters::Spec(log_filters.to_string()));
     Ok(())
 }
 
@@ -4748,6 +5004,626 @@ mod tests {
         };
         let hints = a.active_hints();
         assert_eq!(hints, vec![Hint::Move, Hint::Open("Select"), Hint::Cancel]);
+    }
+
+    // -- Launch action ----------------------------------------------------------
+
+    /// App on the Launchers section with configured `bob` instances named
+    /// according to `instances`, with the cursor on the `bob` row.
+    fn launcher_app_with(instances: &[&str]) -> App {
+        let mut config = Config::default();
+        for id in instances {
+            config.launchers.insert(
+                id.to_string(),
+                crate::config::LauncherConfig {
+                    launcher_id: id.to_string(),
+                    launcher_type: "bob".to_string(),
+                    enabled_capabilities: vec![],
+                    config: serde_json::json!({}),
+                },
+            );
+        }
+        let mut a = App::new(crate::AppContext::new(
+            config,
+            Arc::new(CaptureUi::default()),
+        ));
+        a.section = Section::Launchers;
+        a.configured_only[2] = false;
+
+        a.row = a
+            .filtered_ids("")
+            .iter()
+            .position(|id| id == "bob")
+            .unwrap();
+        a.sync_table_state();
+        a
+    }
+
+    /// App on the Launchers section with one configured `bob` instance named
+    /// `my-bob`, with the cursor on the `bob` row.
+    fn launcher_app() -> App {
+        launcher_app_with(&["my-bob"])
+    }
+
+    fn key(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn instance_pick_l_is_noop() {
+        let mut a = app();
+        let mode = AppMode::InstancePick {
+            type_id: "bob".to_string(),
+            instances: vec!["my-bob".to_string()],
+            cursor: 1,
+        };
+        a.mode = mode.clone();
+        a.section = Section::Launchers;
+        assert_eq!(a.handle_key(key('l')), AppAction::None);
+        assert_eq!(a.mode, mode);
+    }
+
+    #[test]
+    fn browse_l_on_configured_launcher_single_instance_enters_launch_confirm() {
+        let mut a = launcher_app();
+        assert_eq!(a.handle_key(key('l')), AppAction::None);
+        assert_eq!(
+            a.mode,
+            AppMode::LaunchConfirm {
+                instance_id: "my-bob".to_string(),
+                yes: true,
+            }
+        );
+    }
+
+    #[test]
+    fn browse_l_on_multi_instance_launcher_enters_launch_pick() {
+        let mut a = launcher_app_with(&["my-bob-1", "my-bob-2"]);
+
+        assert_eq!(a.handle_key(key('l')), AppAction::None);
+        assert_eq!(
+            a.mode,
+            AppMode::LaunchPick {
+                type_id: "bob".to_string(),
+                instances: vec!["my-bob-1".to_string(), "my-bob-2".to_string()],
+                cursor: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn browse_l_multi_instance_select_and_launch_flow() {
+        let mut a = launcher_app_with(&["my-bob-1", "my-bob-2"]);
+
+        // Step 1: Press 'l' in Browse mode -> enters LaunchPick at cursor 0 (first instance)
+        assert_eq!(a.handle_key(key('l')), AppAction::None);
+        assert!(matches!(&a.mode, AppMode::LaunchPick { cursor: 0, .. }));
+
+        // Step 2: Press 'j' (down) -> moves to cursor 1 (second instance: my-bob-2)
+        assert_eq!(
+            a.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE)),
+            AppAction::None
+        );
+        assert!(matches!(&a.mode, AppMode::LaunchPick { cursor: 1, .. }));
+
+        // Step 3: Press 'Enter' or 'l' -> enters LaunchConfirm
+        assert_eq!(a.handle_key(key('l')), AppAction::None);
+        assert_eq!(
+            a.mode,
+            AppMode::LaunchConfirm {
+                instance_id: "my-bob-2".to_string(),
+                yes: true,
+            }
+        );
+
+        // Step 4: Press 'Enter' to confirm launch -> emits Launch action and returns to Browse mode
+        assert_eq!(
+            a.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            AppAction::Launch("my-bob-2".to_string())
+        );
+        assert_eq!(a.mode, AppMode::Browse);
+    }
+
+    #[test]
+    fn launch_confirm_toggle_no_cancels() {
+        let mut a = launcher_app();
+        a.mode = AppMode::LaunchConfirm {
+            instance_id: "my-bob".to_string(),
+            yes: true,
+        };
+        // Toggle with 'n'
+        assert_eq!(a.handle_key(key('n')), AppAction::None);
+        assert_eq!(
+            a.mode,
+            AppMode::LaunchConfirm {
+                instance_id: "my-bob".to_string(),
+                yes: false,
+            }
+        );
+        // Confirm 'No' with Enter -> returns AppAction::None and returns to Browse
+        assert_eq!(
+            a.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            AppAction::None
+        );
+        assert_eq!(a.mode, AppMode::Browse);
+    }
+
+    #[test]
+    fn launch_confirm_esc_cancels() {
+        let mut a = launcher_app();
+        a.mode = AppMode::LaunchConfirm {
+            instance_id: "my-bob".to_string(),
+            yes: true,
+        };
+        assert_eq!(
+            a.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            AppAction::None
+        );
+        assert_eq!(a.mode, AppMode::Browse);
+    }
+
+    #[test]
+    fn launch_pick_esc_cancels() {
+        let mut a = launcher_app();
+        a.mode = AppMode::LaunchPick {
+            type_id: "bob".to_string(),
+            instances: vec!["my-bob-1".to_string(), "my-bob-2".to_string()],
+            cursor: 0,
+        };
+        assert_eq!(
+            a.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            AppAction::None
+        );
+        assert_eq!(a.mode, AppMode::Browse);
+    }
+
+    #[test]
+    fn browse_l_on_unconfigured_launcher_is_noop() {
+        let mut a = launcher_app();
+        a.row = a
+            .filtered_ids("")
+            .iter()
+            .position(|id| id == "goose")
+            .unwrap();
+        assert_eq!(a.handle_key(key('l')), AppAction::None);
+    }
+
+    #[test]
+    fn browse_l_outside_launchers_section_is_noop() {
+        let mut a = launcher_app();
+        a.section = Section::Providers;
+        assert_eq!(a.handle_key(key('l')), AppAction::None);
+    }
+
+    #[test]
+    fn detail_l_on_configured_launcher_single_instance_enters_launch_confirm() {
+        let mut a = launcher_app();
+        a.mode = AppMode::Detail("bob".to_string());
+        assert_eq!(a.handle_key(key('l')), AppAction::None);
+        assert_eq!(
+            a.mode,
+            AppMode::LaunchConfirm {
+                instance_id: "my-bob".to_string(),
+                yes: true,
+            }
+        );
+    }
+
+    #[test]
+    fn detail_l_on_multi_instance_launcher_enters_launch_pick() {
+        let mut a = launcher_app_with(&["my-bob-1", "my-bob-2"]);
+        a.mode = AppMode::Detail("bob".to_string());
+
+        assert_eq!(a.handle_key(key('l')), AppAction::None);
+        assert_eq!(
+            a.mode,
+            AppMode::LaunchPick {
+                type_id: "bob".to_string(),
+                instances: vec!["my-bob-1".to_string(), "my-bob-2".to_string()],
+                cursor: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn detail_l_on_unconfigured_launcher_is_noop() {
+        let mut a = launcher_app();
+        a.mode = AppMode::Detail("goose".to_string());
+        assert_eq!(a.handle_key(key('l')), AppAction::None);
+    }
+
+    #[test]
+    fn detail_l_outside_launchers_section_is_noop() {
+        let mut a = launcher_app();
+        a.section = Section::Providers;
+        a.mode = AppMode::Detail("bob".to_string());
+        assert_eq!(a.handle_key(key('l')), AppAction::None);
+    }
+
+    #[test]
+    fn active_hints_browse_shows_launch_for_configured_launcher() {
+        let hints = launcher_app().active_hints();
+        assert!(hints.contains(&Hint::Launch));
+        let len = hints.len();
+        assert_eq!(hints[len - 2], Hint::Quit);
+        assert_eq!(hints[len - 1], Hint::ConfiguredLegend);
+        assert_eq!(hints[len - 3], Hint::Launch);
+    }
+
+    #[test]
+    fn active_hints_browse_hides_launch_for_unconfigured_launcher() {
+        let mut a = launcher_app();
+        a.row = a
+            .filtered_ids("")
+            .iter()
+            .position(|id| id == "goose")
+            .unwrap();
+        assert!(!a.active_hints().contains(&Hint::Launch));
+    }
+
+    #[test]
+    fn active_hints_detail_mode_launchers_includes_launch() {
+        let mut a = launcher_app();
+        a.mode = AppMode::Detail("bob".to_string());
+        assert_eq!(
+            a.active_hints(),
+            vec![Hint::Scroll, Hint::Open("Setup"), Hint::Launch, Hint::Back]
+        );
+    }
+
+    #[test]
+    fn active_hints_detail_mode_launchers_unconfigured_hides_launch() {
+        let mut a = launcher_app();
+        a.mode = AppMode::Detail("goose".to_string());
+        assert_eq!(
+            a.active_hints(),
+            vec![Hint::Scroll, Hint::Open("Setup"), Hint::Back]
+        );
+    }
+
+    #[test]
+    fn active_hints_instance_pick_launchers_does_not_include_launch() {
+        let mut a = launcher_app();
+        a.mode = AppMode::InstancePick {
+            type_id: "bob".to_string(),
+            instances: vec!["my-bob".to_string()],
+            cursor: 0,
+        };
+        assert_eq!(
+            a.active_hints(),
+            vec![Hint::Move, Hint::Open("Select"), Hint::Cancel]
+        );
+    }
+
+    #[test]
+    fn active_hints_launch_pick() {
+        let mut a = launcher_app();
+        a.mode = AppMode::LaunchPick {
+            type_id: "bob".to_string(),
+            instances: vec!["my-bob-1".to_string(), "my-bob-2".to_string()],
+            cursor: 0,
+        };
+        assert_eq!(
+            a.active_hints(),
+            vec![Hint::Move, Hint::Open("Select"), Hint::Cancel]
+        );
+    }
+
+    #[test]
+    fn active_hints_launch_confirm() {
+        let mut a = launcher_app();
+        a.mode = AppMode::LaunchConfirm {
+            instance_id: "my-bob".to_string(),
+            yes: true,
+        };
+        assert_eq!(
+            a.active_hints(),
+            vec![Hint::ConfirmYN, Hint::Confirm, Hint::Cancel]
+        );
+    }
+
+    #[test]
+    fn launch_pick_key_navigation_and_clamping() {
+        let mut a = launcher_app();
+        a.mode = AppMode::LaunchPick {
+            type_id: "bob".to_string(),
+            instances: vec!["my-bob-1".to_string(), "my-bob-2".to_string()],
+            cursor: 1,
+        };
+
+        // Up arrow moves up
+        assert_eq!(
+            a.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+            AppAction::None
+        );
+        assert!(matches!(a.mode, AppMode::LaunchPick { cursor: 0, .. }));
+
+        // Up again saturates at 0
+        assert_eq!(a.handle_key(key('k')), AppAction::None);
+        assert!(matches!(a.mode, AppMode::LaunchPick { cursor: 0, .. }));
+
+        // Down arrow moves down
+        assert_eq!(
+            a.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            AppAction::None
+        );
+        assert!(matches!(a.mode, AppMode::LaunchPick { cursor: 1, .. }));
+
+        // Down again clamps at max
+        assert_eq!(a.handle_key(key('j')), AppAction::None);
+        assert!(matches!(a.mode, AppMode::LaunchPick { cursor: 1, .. }));
+
+        // Unrelated key is noop
+        assert_eq!(key('x').code, KeyCode::Char('x'));
+        assert_eq!(a.handle_key(key('x')), AppAction::None);
+
+        // Enter on empty instances is noop
+        a.mode = AppMode::LaunchPick {
+            type_id: "bob".to_string(),
+            instances: vec![],
+            cursor: 0,
+        };
+        assert_eq!(
+            a.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            AppAction::None
+        );
+    }
+
+    #[test]
+    fn launch_confirm_all_navigation_keys() {
+        let mut a = launcher_app();
+        a.mode = AppMode::LaunchConfirm {
+            instance_id: "my-bob".to_string(),
+            yes: true,
+        };
+
+        // Toggle with Tab
+        assert_eq!(
+            a.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+            AppAction::None
+        );
+        assert!(matches!(a.mode, AppMode::LaunchConfirm { yes: false, .. }));
+
+        // Toggle with Left
+        assert_eq!(
+            a.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
+            AppAction::None
+        );
+        assert!(matches!(a.mode, AppMode::LaunchConfirm { yes: true, .. }));
+
+        // Toggle with Right
+        assert_eq!(
+            a.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+            AppAction::None
+        );
+        assert!(matches!(a.mode, AppMode::LaunchConfirm { yes: false, .. }));
+
+        // Toggle with 'h'
+        assert_eq!(a.handle_key(key('h')), AppAction::None);
+        assert!(matches!(a.mode, AppMode::LaunchConfirm { yes: true, .. }));
+
+        // Toggle with 'l'
+        assert_eq!(a.handle_key(key('l')), AppAction::None);
+        assert!(matches!(a.mode, AppMode::LaunchConfirm { yes: false, .. }));
+
+        // 'y' sets true
+        assert_eq!(a.handle_key(key('y')), AppAction::None);
+        assert!(matches!(a.mode, AppMode::LaunchConfirm { yes: true, .. }));
+
+        // 'N' sets false
+        assert_eq!(a.handle_key(key('N')), AppAction::None);
+        assert!(matches!(a.mode, AppMode::LaunchConfirm { yes: false, .. }));
+
+        // 'Y' sets true
+        assert_eq!(a.handle_key(key('Y')), AppAction::None);
+        assert!(matches!(a.mode, AppMode::LaunchConfirm { yes: true, .. }));
+
+        // Other key is noop
+        assert_eq!(a.handle_key(key('z')), AppAction::None);
+        assert!(matches!(a.mode, AppMode::LaunchConfirm { yes: true, .. }));
+    }
+
+    #[test]
+    fn render_launch_pick_and_confirm_modes() {
+        let mut a = launcher_app();
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+
+        let to_screen = |term: &ratatui::Terminal<ratatui::backend::TestBackend>| -> String {
+            term.backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|c| c.symbol())
+                .collect()
+        };
+
+        // LaunchPick mode
+        a.mode = AppMode::LaunchPick {
+            type_id: "bob".to_string(),
+            instances: vec!["my-bob-1".to_string(), "my-bob-2".to_string()],
+            cursor: 0,
+        };
+        terminal.draw(|f| a.render(f)).unwrap();
+        {
+            let screen = to_screen(&terminal);
+            assert!(
+                screen.contains(App::LAUNCH_PICK_TITLE_SUFFIX),
+                "LaunchPick title missing; screen: {screen:?}"
+            );
+            assert!(
+                screen.contains("▶ my-bob-1"),
+                "LaunchPick cursor row missing; screen: {screen:?}"
+            );
+            assert!(
+                screen.contains("my-bob-2"),
+                "LaunchPick second instance missing; screen: {screen:?}"
+            );
+        }
+
+        // LaunchConfirm mode (yes = true, with capabilities)
+        let mut config = Config::default();
+        config.launchers.insert(
+            "my-bob".to_string(),
+            crate::config::LauncherConfig {
+                launcher_id: "my-bob".to_string(),
+                launcher_type: "bob".to_string(),
+                enabled_capabilities: vec!["mcp".to_string()],
+                config: serde_json::json!({}),
+            },
+        );
+        let mut a2 = App::new(crate::AppContext::new(
+            config,
+            Arc::new(CaptureUi::default()),
+        ));
+        a2.mode = AppMode::LaunchConfirm {
+            instance_id: "my-bob".to_string(),
+            yes: true,
+        };
+        terminal.draw(|f| a2.render(f)).unwrap();
+        {
+            let screen = to_screen(&terminal);
+            assert!(
+                screen.contains(App::CONFIRM_LAUNCH_TITLE),
+                "LaunchConfirm title missing; screen: {screen:?}"
+            );
+            assert!(
+                screen.contains("my-bob"),
+                "LaunchConfirm instance id missing; screen: {screen:?}"
+            );
+            assert!(
+                screen.contains("mcp"),
+                "LaunchConfirm capability missing; screen: {screen:?}"
+            );
+            // Last word via the same helper the renderer uses — only reaches the
+            // buffer if Wrap is active; clipped to one line without it.
+            let last_word = App::launch_confirm_message("my-bob", "type: bob, capabilities: mcp")
+                .split_whitespace()
+                .last()
+                .unwrap()
+                .to_string();
+            assert!(
+                screen.contains(&last_word),
+                "LaunchConfirm message tail clipped (wrap missing?); \
+                 last word: {last_word:?}; screen: {screen:?}"
+            );
+            assert!(
+                screen.contains("▶ Yes"),
+                "LaunchConfirm Yes cursor missing; screen: {screen:?}"
+            );
+            assert!(
+                screen.contains("No"),
+                "LaunchConfirm No button missing; screen: {screen:?}"
+            );
+        }
+
+        // LaunchConfirm mode (yes = false, without capabilities)
+        a.mode = AppMode::LaunchConfirm {
+            instance_id: "my-bob".to_string(),
+            yes: false,
+        };
+        terminal.draw(|f| a.render(f)).unwrap();
+        {
+            let screen = to_screen(&terminal);
+            assert!(
+                screen.contains(App::CONFIRM_LAUNCH_TITLE),
+                "LaunchConfirm(no) title missing; screen: {screen:?}"
+            );
+            assert!(
+                screen.contains("my-bob"),
+                "LaunchConfirm(no) instance id missing; screen: {screen:?}"
+            );
+            let last_word = App::launch_confirm_message("my-bob", "")
+                .split_whitespace()
+                .last()
+                .unwrap()
+                .to_string();
+            assert!(
+                screen.contains(&last_word),
+                "LaunchConfirm(no) message tail clipped (wrap missing?); \
+                 last word: {last_word:?}; screen: {screen:?}"
+            );
+            assert!(
+                screen.contains("▶ No"),
+                "LaunchConfirm No cursor missing; screen: {screen:?}"
+            );
+        }
+
+        // LaunchConfirm mode for non-existent launcher id
+        a.mode = AppMode::LaunchConfirm {
+            instance_id: "unknown".to_string(),
+            yes: true,
+        };
+        terminal.draw(|f| a.render(f)).unwrap();
+        {
+            let screen = to_screen(&terminal);
+            assert!(
+                screen.contains(App::CONFIRM_LAUNCH_TITLE),
+                "LaunchConfirm(unknown) title missing; screen: {screen:?}"
+            );
+            assert!(
+                screen.contains("unknown"),
+                "LaunchConfirm(unknown) instance id missing; screen: {screen:?}"
+            );
+            let last_word = App::launch_confirm_message("unknown", "")
+                .split_whitespace()
+                .last()
+                .unwrap()
+                .to_string();
+            assert!(
+                screen.contains(&last_word),
+                "LaunchConfirm(unknown) message tail clipped (wrap missing?); \
+                 last word: {last_word:?}; screen: {screen:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn launch_confirm_buttons_keep_their_columns_when_toggled() {
+        let mut a = launcher_app();
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+
+        // Column of the first cell of `word` in row `y` at or after column
+        // `from`, or None.
+        let find_in_row = |term: &ratatui::Terminal<ratatui::backend::TestBackend>,
+                           word: &str,
+                           y: u16,
+                           from: u16|
+         -> Option<u16> {
+            let buffer = term.backend().buffer();
+            let letters: Vec<String> = word.chars().map(String::from).collect();
+            (from..buffer.area.width.saturating_sub(letters.len() as u16)).find(|&x| {
+                letters
+                    .iter()
+                    .enumerate()
+                    .all(|(i, l)| buffer[(x + i as u16, y)].symbol() == l)
+            })
+        };
+
+        // (row, Yes column, No column) of the button row: the row where
+        // "Yes" is followed by "No".
+        let mut positions = vec![];
+        for yes in [true, false] {
+            a.mode = AppMode::LaunchConfirm {
+                instance_id: "my-bob".to_string(),
+                yes,
+            };
+            terminal.draw(|f| a.render(f)).unwrap();
+            let height = terminal.backend().buffer().area.height;
+            let buttons = (0..height)
+                .find_map(|y| {
+                    let yes_x = find_in_row(&terminal, "Yes", y, 0)?;
+                    let no_x = find_in_row(&terminal, "No", y, yes_x + 3)?;
+                    Some((y, yes_x, no_x))
+                })
+                .expect("Yes/No button row missing");
+            positions.push(buttons);
+        }
+        assert_eq!(
+            positions[0], positions[1],
+            "Yes/No buttons moved when the selection changed: {positions:?}"
+        );
     }
 
     #[test]

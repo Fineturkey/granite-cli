@@ -21,13 +21,13 @@ use crate::utils::ui::base::{PullHandle, Ui};
 
 /// A single line of non-interactive output emitted during setup.
 #[derive(Debug, Clone)]
-pub struct OutputLine {
-    pub level: OutputLevel,
-    pub text: String,
+pub(crate) struct OutputLine {
+    pub(crate) level: OutputLevel,
+    pub(crate) text: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum OutputLevel {
+pub(crate) enum OutputLevel {
     Info,
     Warn,
     Error,
@@ -35,18 +35,18 @@ pub enum OutputLevel {
 
 /// Live state for one active or completed pull/download.
 #[derive(Debug, Clone)]
-pub struct PullState {
-    pub label: String,
+pub(crate) struct PullState {
+    pub(crate) label: String,
     /// `None` means total is not yet known (spinner mode).
-    pub total: Option<u64>,
-    pub downloaded: u64,
-    pub done: bool,
-    pub error: Option<String>,
+    pub(crate) total: Option<u64>,
+    pub(crate) downloaded: u64,
+    pub(crate) done: bool,
+    pub(crate) error: Option<String>,
 }
 
 /// A prompt the setup wizard needs answered.
 #[derive(Debug, Clone)]
-pub enum Prompt {
+pub(crate) enum Prompt {
     /// Pick one item from a list.  Returns the chosen index.
     Select {
         message: String,
@@ -73,28 +73,28 @@ pub enum Prompt {
 
 /// The answer the TUI sends back for one [`Prompt`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Answer {
+pub(crate) enum Answer {
     Index(usize),
     Indices(Vec<usize>),
     Bool(bool),
     Text(String),
 }
 
-pub struct TuiUi {
+pub(crate) struct TuiUi {
     /// Prompts sent to the TUI render loop.
-    pub prompt_tx: std::sync::mpsc::SyncSender<Prompt>,
+    prompt_tx: std::sync::mpsc::SyncSender<Prompt>,
     /// Answers received from the TUI render loop.
     answer_rx: Mutex<std::sync::mpsc::Receiver<Answer>>,
     /// Lines of non-interactive output accumulated so far.
-    pub output: Arc<Mutex<Vec<OutputLine>>>,
+    pub(crate) output: Arc<Mutex<Vec<OutputLine>>>,
     /// Live pull/download states, keyed by handle id.
-    pub pulls: Arc<Mutex<HashMap<u64, PullState>>>,
+    pulls: Arc<Mutex<HashMap<u64, PullState>>>,
     /// Counter for allocating pull handles.
     next_handle: Mutex<u64>,
 }
 
 impl TuiUi {
-    pub fn new(
+    pub(crate) fn new(
         prompt_tx: std::sync::mpsc::SyncSender<Prompt>,
         answer_rx: std::sync::mpsc::Receiver<Answer>,
         output: Arc<Mutex<Vec<OutputLine>>>,
@@ -134,6 +134,12 @@ impl TuiUi {
 }
 
 impl Ui for TuiUi {
+    /// Prompts go to the TUI's own pane over `prompt_tx`, so a TUI session
+    /// can ask whatever stdin and stderr are connected to.
+    fn is_interactive(&self) -> bool {
+        true
+    }
+
     fn table(&self, _title: &str, _headers: &[&str], _rows: &[Vec<String>]) {}
     fn detail(&self, _title: &str, _fields: &[(&str, String)]) {}
 
@@ -281,3 +287,23 @@ impl Ui for TuiUi {
 // Setup tasks run on a blocking thread; Ui requires Send + Sync.
 unsafe impl Send for TuiUi {}
 unsafe impl Sync for TuiUi {}
+
+/*-- tests --*/
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_always_interactive() {
+        let (prompt_tx, _prompt_rx) = std::sync::mpsc::sync_channel::<Prompt>(0);
+        let (_answer_tx, answer_rx) = std::sync::mpsc::sync_channel::<Answer>(0);
+        let ui = TuiUi::new(
+            prompt_tx,
+            answer_rx,
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(HashMap::new())),
+        );
+        assert!(ui.is_interactive());
+    }
+}
