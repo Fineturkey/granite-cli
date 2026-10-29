@@ -1271,9 +1271,9 @@ impl App {
 
                 let searching = !query.is_empty();
                 let header = if searching {
-                    Row::new(vec!["", "ID", "DEFAULT URL", "MATCHED ON"])
+                    Row::new(vec!["", "ID", "DEFAULT URLS", "MATCHED ON"])
                 } else {
-                    Row::new(vec!["", "ID", "DEFAULT URL"])
+                    Row::new(vec!["", "ID", "DEFAULT URLS"])
                 }
                 .style(
                     Style::default()
@@ -1307,14 +1307,14 @@ impl App {
                             Row::new(vec![
                                 marker,
                                 Cell::from(id.to_string()),
-                                Cell::from(p.default_endpoint.clone()),
+                                Cell::from(p.formatted_default_base_urls()),
                                 Cell::from(reason),
                             ])
                         } else {
                             Row::new(vec![
                                 marker,
                                 Cell::from(id.to_string()),
-                                Cell::from(p.default_endpoint.clone()),
+                                Cell::from(p.formatted_default_base_urls()),
                             ])
                         }
                         .style(style)
@@ -2102,8 +2102,8 @@ impl App {
                             Span::raw(p.provider_type.to_string()),
                         ]),
                         Line::from(vec![
-                            Span::styled("Default URL: ", bold),
-                            Span::raw(p.default_endpoint.clone()),
+                            Span::styled("Default URLs: ", bold),
+                            Span::raw(p.formatted_default_base_urls()),
                         ]),
                         Line::from(vec![
                             Span::styled("API Types: ", bold),

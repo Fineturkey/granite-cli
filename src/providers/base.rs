@@ -223,11 +223,11 @@ pub(crate) enum PullResult {
 
 /// Metadata describing a provider implementation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ProviderMetadata {
+pub struct ProviderMetadata {
     pub(crate) name: String,
     pub(crate) description: String,
     pub(crate) provider_type: ProviderType,
-    pub(crate) default_endpoint: String,
+    pub(crate) default_base_urls: Vec<String>,
 
     /// API types this provider implementation supports (AND logic)
     pub(crate) supported_api_types: Vec<ApiType>,
@@ -238,6 +238,16 @@ pub(crate) struct ProviderMetadata {
     pub(crate) supported_formats: Vec<ModelFormat>,
     pub(crate) authentication: Vec<AuthType>,
     pub(crate) tags: Vec<String>,
+}
+
+impl ProviderMetadata {
+    pub(crate) fn formatted_default_base_urls(&self) -> String {
+        if self.default_base_urls.is_empty() {
+            "-".to_string()
+        } else {
+            self.default_base_urls.join(", ")
+        }
+    }
 }
 
 impl std::fmt::Display for ProviderMetadata {
@@ -479,7 +489,7 @@ mod tests {
             name: "Ollama".to_string(),
             description: "Local Ollama server".to_string(),
             provider_type: ProviderType::Local,
-            default_endpoint: "http://localhost:11434".to_string(),
+            default_base_urls: vec!["http://localhost:11434".to_string()],
             supported_api_types: vec![ApiType::Ollama],
             default_function_endpoints: HashMap::new(),
             supported_formats: vec![],
