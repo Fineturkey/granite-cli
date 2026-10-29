@@ -71,7 +71,7 @@ pub(crate) struct LlamaCppProviderConfig {
 }
 
 fn default_llamacpp_url() -> String {
-    "http://localhost:8080".to_string()
+    LlamaCppProvider::metadata().default_base_urls[0].clone()
 }
 
 fn default_timeout() -> u64 {
@@ -544,7 +544,7 @@ mod tests {
         assert_eq!(meta.name, "llama.cpp");
         assert_eq!(
             meta.default_base_urls,
-            vec!["http://localhost:8080", "http://localhost:9931"]
+            vec!["http://localhost:9931", "http://localhost:8080"]
         );
         assert!(meta.supported_api_types.contains(&ApiType::OpenAI));
         assert!(meta.supported_api_types.contains(&ApiType::Anthropic));
