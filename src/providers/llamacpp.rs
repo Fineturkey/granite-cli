@@ -483,8 +483,8 @@ impl HasProviderMetadata for LlamaCppProvider {
             description: "High-performance local inference server for GGUF models with OpenAI and Anthropic API compatibility".to_string(),
             provider_type: ProviderType::Local,
             default_base_urls: vec![
-                "http://localhost:8080".to_string(),
                 "http://localhost:9931".to_string(),
+                "http://localhost:8080".to_string(),
             ],
             supported_api_types: vec![ApiType::OpenAI, ApiType::Anthropic],
             default_function_endpoints: Self::default_function_endpoints(),
