@@ -224,10 +224,10 @@ pub(crate) enum PullResult {
 /// Metadata describing a provider implementation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderMetadata {
-    pub(create) name: String,
-    pub(create) description: String,
-    pub(create) provider_type: ProviderType,
-    pub(create) default_base_urls: Vec<String>,
+    pub(crate) name: String,
+    pub(crate) description: String,
+    pub(crate) provider_type: ProviderType,
+    pub(crate) default_base_urls: Vec<String>,
 
     /// API types this provider implementation supports (AND logic)
     pub(crate) supported_api_types: Vec<ApiType>,
